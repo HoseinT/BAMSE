@@ -25,4 +25,4 @@ Output:
 
 dot files for visualization with graphviz
 
-picke files to load with python 
+pickle files to load with python 
