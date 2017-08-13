@@ -4,12 +4,10 @@ Created on Thu Apr 27 19:07:53 2017
 
 @author: hosein
 """
-alphaa = 1.
+
 import sys
 import numpy as np
-#from itertools import groupby
 from scipy.stats import mvn
-#from sklearn import mixture
 import copy as cp
 import pandas as pd
 import itertools
@@ -24,16 +22,21 @@ import re
 import cvxpy as cvx
 from sklearn.cluster import KMeans
 import pickle
+from scipy.signal import fftconvolve
+from scipy.stats import beta
+import matplotlib.pyplot as plt
+import  os
 
+os.chdir(os.chdir(os.path.dirname(sys.argv[0])))
 class clustering:
-    
+
     def __init__(self,variant_reads, normal_reads, assignments):
         # am and bmm are mutationsXsamples matrices for variant and normal reads
         self.am = np.array(variant_reads)
         self.bm = np.array(normal_reads)
         #0 based integer vactor of assignment of variants to clusters
         self.assign = np.array(assignments).astype(int)
-        #num mutations        
+        #num mutations
         N = len(self.am)
         #num clusters
         K = max(assignments) + 1
@@ -44,34 +47,20 @@ class clustering:
         range(max(self.assign)+1)])
         self.means = (self.As +0.)/(self.As +self.Bs)
         # log maximum likelihood of data for this clustering
-        self.maxlikelihood = np.sum(gammaln(self.am + self.bm+1.) - \
+        self.maxlikelihood = np.sum(gammaln(self.am + self.bm+2.) - \
         gammaln(self.am + 1.)-gammaln(self.bm + 1.)) - \
-        np.sum(gammaln(self.As +self.Bs +1)-gammaln(self.As + 1) - \
+        np.sum(gammaln(self.As +self.Bs +2)-gammaln(self.As + 1) - \
         gammaln(self.Bs + 1))
         # model prior for clustering
 
-        
 
-        self.cluster_prior = -np.log(stril_appx(N,K)) + \
-        log_conf_penalty(self.assign) - (K-1)* np.log(K)
-        
+
+        self.cluster_prior =  log_conf_penalty(self.assign)
+
         #self.cluster_prior =log_conf_penalty2(self.assign,alphaa) - (K-1)* np.log(K)
-        
-    def get_t_normals(self,err):
-        #err is one third of sequencing error rate
-        (K,M) = self.As.shape
-        self.mus = np.zeros((K,M))
-        self.sigs = np.zeros((K,M))
-        self.coeffs = np.zeros((K,M))
-        for k in range(K):
-            for m in range(M):
-                self.mus[k,m] , self.sigs[k,m] = t_beta_to_t_normal(self.As[k,m]+1., \
-                self.Bs[k,m]+1.,err)
-                self.coeffs[k,m] = truncnorm.pdf(nearest(self.mus[k,m]),a=(0.-self.mus[k,m])/self.sigs[k,m],\
-                b=(1.-self.mus[k,m])/self.sigs[k,m], loc = self.mus[k,m] , scale = self.sigs[k,m]) /\
-                norm.pdf(nearest(self.mus[k,m]), loc = self.mus[k,m] , scale = self.sigs[k,m])
-                
-        
+
+
+
     def get_trees(self):
 
         margin=0
@@ -80,78 +69,131 @@ class clustering:
             margin -=0.01
             treeset =get_all_trees(self.means,margin)
         self.trees = treeset
-        
-        
-    def analyse_trees_regular(self):
-        #without the sparsity   
+
+
+    def analyse_trees_regular2(self,err):
+        #without the sparsity
         K,M = self.As.shape
         for tree in self.trees:
-            B = get_matrix(tree['tree'])[0]        
+            B = get_matrix(tree['tree'])[0]
             A= np.linalg.inv(B)
             tree['Amatrix'] = A
             tree['Bmatrix'] = B
-            tree['mus'] = self.mus
-            tree['sigs'] = self.sigs
             tree['assign'] = self.assign
-            score = 1            
-            for m in range(M):
-                mu = np.dot(A,self.mus[:,m])
-                covar = A.dot(np.diag(self.sigs[:,m]**2)).dot(A.transpose())
-#                coeffs = np.prod([1./(norm.cdf((1-self.mus[x,m])/self.sigs[x,m]) - \
-#                norm.cdf((0.-self.mus[x,m])/self.sigs[x,m]))  for x in range(K)])
-           
-                score *= mvn.mvnun(np.zeros(K),np.ones(K),mu,covar)[0]*np.prod(self.coeffs[:,m])        
+            score = np.prod(tree_integrate_multisample(tree = tree['tree'], \
+                 b = np.ones(K), As = self.As, Bs = self.Bs , err = err, p= 0. ))
             get_max_values_r2(tree, self.As,self.Bs, err)
             tree['score'] = score*canonizeF(tree['tree'])['scre']
             tree['totalscore']= np.log(tree['score'])+self.cluster_prior + \
             self.maxlikelihood
 
-
-
-    def analyse_trees_sparse(self, prob_zero_cluster):
+    def analyse_trees_sparse2(self, prob_zero_cluster,err):
         p = prob_zero_cluster
         K,M = self.As.shape
         for tree in self.trees:
-            B = get_matrix(tree['tree'])[0]        
+            B = get_matrix(tree['tree'])[0]
             A= np.linalg.inv(B)
-            tree['mus'] = self.mus
-            tree['sigs'] = self.sigs
             tree['Amatrix'] = A
             tree['Bmatrix'] = B
-            tree['assign'] = self.assign            
-            integs = integ_all_profiles(self.mus,self.sigs,self.coeffs,A,p)
+            tree['assign'] = self.assign
+            profls = np.array(list(itertools.product([0, 1], repeat=K)))
+            integs = [tree_integrate_multisample(tree = tree['tree'], \
+            b = x,As = self.As, Bs = self.Bs, err = err, p = p) for x in profls]
             tree['probability_profile'] = integs
             get_max_values2(tree, self.As, self.Bs, err)
-            tree['score'] = np.prod( np.sum(integs)) * canonizeF(tree['tree'])['scre']
+            tree['score'] = np.prod( np.sum(integs,0)) * canonizeF(tree['tree'])['scre']
             tree['totalscore']= np.log(tree['score'])+self.cluster_prior + \
             self.maxlikelihood
 
 
-def nearest(x):
-    if x<= 0:
-        return 0.
-    if x<=1:
-         return x
-    if x>1:
-        return 1.
+def distrib(a,b,err,length = 2048):
+    x = np.linspace(0,1,length)
+    y = beta.pdf(x*(0.5-err)+err,a+1,a+b+2)
+    return y/np.sum(y)*length
 
-def stril_appx(n,k):
-    # Approximation to Stirling numbers of second kind
-    v = (n+0.0)/k
-    G = np.real(-1*lambertw(-v*np.exp(-v)))
-    return np.sqrt(n-k)/(np.sqrt(n*(1-G)) \
-    *G**k*(v-G)**(n-k))*((n-k)/np.exp(1))**(n-k)*comb(n,k)
+def trap_int(x):
+    return (np.cumsum(x) - (x[0]+x)/2.0)/(len(x)-1)
+
+
+def my_convolve(x,y):
+    res = (x[0]*y+y[0]*x)/2.0
+#    print len(res)
+    return (np.convolve(x,y)[:len(x)] - res) / (len(x)-1)
+
+
+def my_convolve2(x,y):
+    res = (x[0]*y+y[0]*x)/2.0
+#    print len(res)
+    return (fftconvolve(x,y)[:len(x)] - res) / (len(x)-1)
+
+
+def eval_int(tree,node,distribs,starred):
+
+    childs =  get_childs(tree,node)
+
+    if len(childs) == 0:
+        return distribs[node]
+    elif len(childs) ==1:
+        if starred[childs[0]] == '*':
+            return distribs[node]* eval_int(tree,childs[0],distribs,starred)
+        else:
+            return distribs[node]*trap_int(eval_int(tree,childs[0],distribs,starred))
+    elif len(childs)>1:
+        if starred[childs[0]] == '*':
+            ch0= eval_int(tree,childs[0],distribs,starred)
+        else:
+            ch0= trap_int(eval_int(tree,childs[0],distribs,starred))
+        return distribs[node] * reduce(lambda x,y:my_convolve(x,y),[ch0]+[eval_int(tree,x,distribs,starred) for x \
+        in childs[1:]])
+
+
+def tree_integrate_single_sample(tree,b,distribs,p):
+    s = p**(len(b)-sum(b)) * (1-p) **(sum(b))
+    starred = ['-' for _ in range(len(tree))]
+    culled_tree = cp.deepcopy(tree)
+    for node in np.where(b==0)[0]:
+        if len(get_childs(tree,node))==0:
+            s *= distribs[node][0]
+            culled_tree[node] = 10000
+        else:
+            starred[get_childs(tree,node)[0]] = '*'
+    root = list(tree).index(-1)
+    return s / np.exp(gammaln(np.sum(b)+2))* trap_int(eval_int(culled_tree,root,distribs,starred))[-1]
+
+
+def tree_integrate_multisample(tree,b,As,Bs,err,p):
+    K,M = As.shape
+    score = []
+    for m in range(M):
+        distribs = [distrib(As[x,m],Bs[x,m],err) for x in range(K)]
+        score += [tree_integrate_single_sample(tree,b,distribs,p)]
+    return np.array(score)
+
+def part_func(n,kmax):
+    T=[np.ones(min(k,kmax)) for k in range(1,n+1)]
+    if n < 4:
+        return T[n-1]
+    m = 4
+    while (m<n+1):
+        for k in range(1,min(m,kmax)):
+            T[m-1][k] = T[m-2][k-1]
+            if m-1-k > k:
+                 T[m-1][k] += T[m-2-k][k]
+        m = m+1
+    return T[n-1]
+
 
 def log_conf_penalty(assign):
     partition = np.unique(assign, return_counts = True)[1]
-    return np.sum(gammaln(partition+1.)) - gammaln(np.sum(partition)+1)
+    partition_config = np.unique(partition, return_counts = True)[1]
+    return np.sum(gammaln(partition+1.)) - gammaln(np.sum(partition)+1) + \
+    np.sum(gammaln(partition_config+1.)) - np.log(pf[len(partition)-1]) + \
+    np.log(tree_numbers[len(partition)]) - (len(partition)-1)*np.log(len(partition))
 
 
 def log_conf_penalty2(assign,alphaa):
     partition = np.unique(assign, return_counts = True)[1]
     return gammaln(alphaa)+np.sum(gammaln(partition+1.))+len(partition)*np.log(alphaa) - gammaln(np.sum(partition)+alphaa)
-
-
 
 
 def random_assign(N,L):
@@ -165,132 +207,10 @@ def random_assign(N,L):
     return assigns.astype('int')
 
 
-def clusterpenalty(am,bm,assign):
-    a= np.array([np.sum(am[assign==x],0) for x in  range(max(assign)+1)])
-    b= np.array([np.sum(bm[assign==x],0) for x in  range(max(assign)+1)])
-    return np.sum(gammaln(am+bm+1.)-gammaln(am+1.)-gammaln(bm+1.))-np.sum(gammaln(a+b+1)-gammaln(a+1)-gammaln(b+1))
-    
-
-
-def trunc_mean(mu,sig):
-    #mean of a truncated normal
-    return float(truncnorm.stats(a=(0.-mu)/sig, b=(1.-mu)/sig, loc = mu , scale = sig, moments='m'))
-
-def trunc_var(mu,sig):
-    #variance of a truncated normal
-    return float(truncnorm.stats(a=(0.-mu)/sig, b=(1.-mu)/sig, loc = mu , scale = sig, moments='v'))
-
-def equations(p,M,V):
-    mu, sig = p
-    return (trunc_mean(mu,sig)-M, trunc_var(mu,sig)-V)
-
-
-def t_beta_to_t_normal(a,b,err):
-    #approximate the PDF with a truncated normal distribution
-    A=0.5-err
-    M  =  1/A * (betainc(a+1,b,0.5)-betainc(a+1,b,err))/ (betainc(a,b,0.5)-betainc(a,b,err)) * (a+0.0)/(a+b) - err/A
-    #V = sum((x-M)**2*y1)/len(x)
-    V = 1/A**2 * (betainc(a+2,b,0.5)-betainc(a+2,b,err))/ (betainc(a,b,0.5)-betainc(a,b,err)) \
-    * (a+0.0)* (a+1.)/(a+b)/(a+b+1.) - 2*err/A**2 *  (betainc(a+1,b,0.5)-betainc(a+1,b,err))/ (\
-    betainc(a,b,0.5)-betainc(a,b,err)) * (a+0.0)/(a+b) + err**2/A**2 - M**2
-    mu = ((a-1.)/(a+b-2.)-err)/(0.5-err)
-    mu, sig =  fsolve(equations, (((a-1.0)/(a+b-2.0))/A-err, np.sqrt(V)), args = (M,V))
-    return mu , sig
-
-
-
-
-
-def integ_all_profiles(mus,sigs,coeffs,A,p):
-    K = len(A)
-    profls = np.array(list(itertools.product([0, 1], repeat=K)))
-    return [integ_mvn(mus,sigs,coeffs,A,upper,p) for upper in profls]
-
-
-
-def integ_mvn(mus,sigs,coeffs,A,upper,p):
-    knowns = np.where(upper==0)[0]
-    unknowns = np.where(upper==1)[0]
-    kn = len(knowns)
-    uk = len(unknowns)
-#    K,M =mus.shape
-#    coeffs = np.zeros((K,M))
-#    for k in range(K):
-#        for m in range(M):
-#                coeffs[k,m] = truncnorm.pdf(0,a=(0.-mus[k,m])/sigs[k,m],\
-#                b=(1.-mus[k,m])/sigs[k,m], loc =mus[k,m] , scale = sigs[k,m]) /\
-#                norm.pdf(0, loc = mus[k,m] , scale = sigs[k,m])
-#            
-#        
-##    coeffs = 1./(norm.cdf((1.-mus)/sigs) - \
-##   norm.cdf((0.-mus)/sigs))
-#    print coeffs
-    bin_coeff = (1-p)**(sum(upper))* p ** (len(upper)-sum(upper))
-    mu = A.dot(mus)
-    if kn==0:
-        return [mvn.mvnun(np.zeros(uk),np.ones(uk), mu[:,m], \
-        A.dot(np.diag(sigs[:,m]**2)).dot(A.transpose()))[0] \
-            *np.prod(coeffs[:,m])* bin_coeff for m in range(mu.shape[1])]
-    if uk==0:
-        return [mvnorm.pdf(np.zeros(kn), mu[:,m], \
-        A.dot(np.diag(sigs[:,m]**2)).dot(A.transpose())) \
-            *np.prod(coeffs[:,m])* bin_coeff for m in range(mu.shape[1])]
-    else:
-        score = []
-        for m in range(mu.shape[1]):
-            covar = A.dot(np.diag(sigs[:,m]**2)).dot(A.transpose())
-            sig11 =  covar[[[x] for x in unknowns],unknowns]
-            sig22 =  covar[[[x] for x in knowns],knowns]
-            sig12 = covar[[[x] for x in unknowns],knowns]
-            sig21 = covar[[[x] for x in knowns],unknowns]
-            mu1 = mu[unknowns,m]
-            mu2 = mu[knowns,m]
-            mu_c = mu1 - sig12.dot(np.linalg.inv(sig22)).dot(np.zeros(kn)-mu2)
-            sig_c = sig11 - sig12.dot(np.linalg.inv(sig22)).dot(sig21)
-            score += [mvn.mvnun(np.zeros(uk),np.ones(uk),mu_c,sig_c)[0] \
-            * mvnorm.pdf(np.zeros(kn),mu2,sig22) *np.prod(coeffs[:,m])* bin_coeff]
-        return score 
-
-
-
-
-def get_max_values(sparse_tree):
-    prob_profile, A , mus , sigs = sparse_tree['probability_profile'],\
-    sparse_tree['Amatrix'],sparse_tree['mus'],\
-    sparse_tree['sigs']
-    K = len(A)
-    max_inds = np.argmax(prob_profile,0)
-    profls = np.array(list(itertools.product([0, 1], repeat=K)))
-    max_profs = profls[max_inds]
-    mu = A.dot(mus)
-    for m in range(mu.shape[1]):
-        upper = max_profs[m]     
-        knowns = np.where(upper==0)[0]
-        unknowns = np.where(upper==1)[0]
-        kn = len(knowns)
-        uk = len(unknowns)    
-        if kn==0:
-            continue
-        if uk==0:
-            mu[:,m] = np.zeros(K)
-        else:
-            covar = A.dot(np.diag(sigs[:,m]**2)).dot(A.transpose())
-            sig22 =  covar[[[x] for x in knowns],knowns]
-            sig12 = covar[[[x] for x in unknowns],knowns]
-            mu1 = mu[unknowns,m]
-            mu2 = mu[knowns,m]
-            mu[unknowns,m] = mu1 - sig12.dot(np.linalg.inv(sig22)).dot(np.zeros(kn)-mu2)
-            mu[knowns,m] = np.zeros(kn)
-    sparse_tree['clone_proportions'] = mu
-    return mu
-
-
-
-
 def get_max_values2(sparse_tree,As,Bs,err):
     prob_profile, B = sparse_tree['probability_profile'],\
     sparse_tree['Bmatrix']
-    K,M = As.shape 
+    K,M = As.shape
     max_inds = np.argmax(prob_profile,0)
     profls = np.array(list(itertools.product([0, 1], repeat=K)))
     max_profs = profls[max_inds]
@@ -309,46 +229,15 @@ def solve4(B,am,bm,er,profile):
     value=0
     for m in range(M):
         Am = am[:,m].transpose()
-#        print Am
         x = cvx.Variable(n)
         Bm = bm[:,m].transpose()
-        obj2 = cvx.Maximize(cvx.sum_entries(Am*cvx.log(B*x/2.*(1-er)+(1-B*x/2.)*er)+Bm*cvx.log((1-B*x/2.)*(1-er)+B*x/2.*er)))    
+        obj2 = cvx.Maximize(cvx.sum_entries(Am*cvx.log(B*x/2.*(1-er)+(1-B*x/2.)*er)+Bm*cvx.log((1-B*x/2.)*(1-er)+B*x/2.*er)))
         constraints = [x>=np.zeros(n), B*x >= np.zeros(n), B*x <= np.ones(n), x<= profile[m]]
         prob = cvx.Problem(obj2, constraints)
         prob.solve(verbose=False)
         res +=[x.value]
         value += prob.value
     return {'s':np.array(res).transpose()[0],'value':value}
-
-
-
-def get_max_values_r(regular_tree):
-    A , mus , sigs = regular_tree['Amatrix'],regular_tree['mus'],\
-    regular_tree['sigs']
-    K = len(A)
-    mu = A.dot(mus)
-    for m in range(mu.shape[1]):
-        upper = np.where(mu[:,m] <= 0, np.zeros(K),np.ones(K))     
-        knowns = np.where(upper==0)[0]
-        unknowns = np.where(upper==1)[0]
-        kn = len(knowns)
-        uk = len(unknowns)    
-        if kn==0:
-            continue
-        if uk==0:
-            mu[:,m] = np.zeros(K)
-        else:
-            covar = A.dot(np.diag(sigs[:,m]**2)).dot(A.transpose())
-            sig22 =  covar[[[x] for x in knowns],knowns]
-            sig12 = covar[[[x] for x in unknowns],knowns]
-            mu1 = mu[unknowns,m]
-            mu2 = mu[knowns,m]
-            mu[unknowns,m] = mu1 - sig12.dot(np.linalg.inv(sig22)).dot(np.zeros(kn)-mu2)
-            mu[knowns,m] = np.zeros(kn)
-    regular_tree['clone_proportions'] = mu
-    return mu
-
-
 
 def get_max_values_r2(regular_tree, As, Bs, err):
     B = regular_tree['Bmatrix']
@@ -359,8 +248,7 @@ def get_max_values_r2(regular_tree, As, Bs, err):
 
 
 
-    
-#label= "c'+str(n)+'"\n
+
 def write_to_dot(destination_dot, tree, sample_names,colors=['darkseagreen1','deepskyblue','cornsilk','coral'
 ,'deeppink','gray','crimson','navy','salmon','yellow','violet','aquamarine']):
     props = tree['clone_proportions']
@@ -381,29 +269,28 @@ def write_to_dot(destination_dot, tree, sample_names,colors=['darkseagreen1','de
         fi.write('legend \n[\nshape = none\n ')
         fi.write('label = <<table border="0" cellspacing="0">\n')
         for s in range(props.shape[1]):
-            if props[n,s]>0:
-                fi.write('<tr><td  border="1" fixedsize="true" width="100" ' + \
-                ' height="20" bgcolor="'+colors[s]+'">'+sample_names[s]+'</td></tr>\n')
+            fi.write('<tr><td  border="1" fixedsize="true" width="100" ' + \
+            ' height="20" bgcolor="'+colors[s]+'">'+sample_names[s]+'</td></tr>\n')
         fi.write('\n</table>>\n]\n')
 
         for n in range(len(tree['tree'])):
             if tree['tree'][n] >= 0:
                 fi.write('node'+str(int(tree['tree'][n]))+' -> node'+\
                 str(n)+ '[label ="'+str(sum(tree['assign']==n))+'"]\n')
-        
+
         fi.write('}')
-            
+
 
 def indexTobinary(inds,length):
     a = [0 for x in range(length)]
     for ind in inds:
         a[ind]=1
-    return a 
+    return a
 
 
 def get_child_nodes(prufer,node):
     return [x[not x.index(node)] for x in prufer.tree_repr if node in x]
-                
+
 def get_childs(tree,node):
     return [i for i, x in enumerate(tree) if x == node]
 
@@ -458,7 +345,7 @@ def get_all_trees(values,margin):
         tree = -50*np.ones(K)
         tree[x]= -1
         result += [{'sticks':sticks, 'tree':tree, 'root':x, 'margin':margin}]
-#    print result
+
     for count in range(1,K):
         newresult = []
         for res in result:
@@ -491,12 +378,12 @@ def get_all_trees(values,margin):
                                 newres['sticks'][node] = values[node]-sum([values[x] for x \
                             in subset])
                                 newres['sticks'][par] = values[par]-sum([values[x] for x \
-                            in complement])-values[node] 
+                            in complement])-values[node]
                                 newres['margin'] = res['margin']-min(0,sum_min_dif(values[par],sum([values[x] for x \
                             in complement])+values[node])+sum_min_dif(values[node],sum([values[x] for x \
-                            in subset])))                                
+                            in subset])))
                                 newresult +=[newres]
-        result = newresult            
+        result = newresult
     return result
 
 
@@ -543,14 +430,6 @@ def unique_Kmeans_clustering(As,Bs,num_clusters,n_init):
     return result
 
 
-#import pickle
-#with open('AllTrees.txt') as f:
-#    [alltrees, treemakeup] = pickle.load(f)
-#
-#
-#K=8
-#X = sim_data_readcounts(K,3,alltrees,100,coverage=200)
-#print K
 
 
 inputfile = sys.argv[1]
@@ -559,8 +438,13 @@ sparsity = float(sys.argv[3])
 n_trees = int(sys.argv[4])
 max_clusts= int(sys.argv[5])
 top_trees = int(sys.argv[6])
+
 print max_clusts
 table_data = pd.read_table(inputfile)
+max_clusts = min(len(table_data),max_clusts)
+pf = part_func(len(table_data),max_clusts)
+print len(table_data),pf
+tree_numbers = np.array([1, 1, 1, 2, 4, 9, 20, 47, 108, 252, 582, 1345, 3086, 7072, 16121, 36667, 83099, 187885, 423610, 953033, 2139158, 4792126, 10714105, 23911794, 53273599, 118497834, 263164833, 583582570])
 ref_cols=[re.match('(.*)?.ref',x) for x in table_data.columns.values]
 var_cols=[re.match('(.*)?.var',x) for x in table_data.columns.values]
 ref_names =[x.string.replace('.ref','') for x in filter(None,ref_cols)]
@@ -568,39 +452,54 @@ var_names =[x.string.replace('.var','') for x in filter(None,var_cols)]
 sample_names = set.intersection(set(ref_names),set(var_names))
 sample_names = list(sample_names)
 sample_names.sort()
+print sample_names
 X={'As':table_data[[x+'.var' for x in sample_names]].as_matrix(),\
 'Bs':table_data[[x+'.ref' for x in sample_names]].as_matrix()}
+print X['As'].shape
 clusterings = []
-for K in range(1,max_clusts):
-    Y = (X['As']+0.0)/(X['Bs']+X['As'])
-    score = -1*float("inf")
-    assign = KMeans(n_clusters=K,n_init=n_trees).fit(Y).labels_
-    clusterings += [clustering(X['As'],X['Bs'],assign)]
-    raw_scores= np.array([x.cluster_prior + x.maxlikelihood for x in clusterings])
-    print raw_scores
-    candidate_numbers = raw_scores.argsort()[-2:]
+for K in range(1,max_clusts+1):
+   Y = (X['As']+0.0)/(X['Bs']+X['As'])
+   print Y.shape
+   score = -1*float("inf")
+   assign = KMeans(n_clusters=K,n_init=100).fit(Y).labels_
+   clusterings += [clustering(X['As'],X['Bs'],assign)]
+   raw_scores= np.array([x.cluster_prior + x.maxlikelihood for x in clusterings])
+   print raw_scores
+if np.any(np.diff(raw_scores)<0):
+    candidate_numbers = raw_scores.argsort()[-3:]
+else:
+    candidate_numbers = [max_clusts]
 print 'possible number of clusters:' , candidate_numbers
 clusts = []
 for x in candidate_numbers:
-    clusts += list(unique_Kmeans_clustering(X['As'],X['Bs'],x,n_trees))
+   clusts += list(unique_Kmeans_clustering(X['As'],X['Bs'],x,n_trees))
 for x,clust in enumerate(clusts):
-    print 'analysis clustering: ' +str(x+1) +' of '+str(len(clusts))
-    clust.get_t_normals(err)
-    clust.get_trees()
-    print clust.trees[0]['tree']
-    if sparsity <0 :
-        clust.analyse_trees_regular()
-    else:
-        clust.analyse_trees_sparse(sparsity)
+   print 'analysis clustering: ' +str(x+1) +' of '+str(len(clusts))
+#   clust.get_t_normals(err)
+   clust.get_trees()
+#   if sparsity <0 :
+   clust.analyse_trees_regular2(err)
 trees = []
 for clust in clusts:
-    trees += clust.trees
+   trees += clust.trees
 ordered = np.argsort([-1*x['totalscore'] for x in  trees])
 trees = [trees[x] for x in ordered]
 for x in trees:
-    x['sample_names']=list(sample_names)
+   x['sample_names']=list(sample_names)
+sparse_trees =[]
 for t in range(min(top_trees,len(trees))):
-    write_to_dot('tree_number_'+str(t)+'.dot',trees[t],list(sample_names))
+    this_tree = trees[t]
+    if (sparsity>0 and sparsity <1):
+        temp_clust = clustering(X['As'],X['Bs'],trees[t]['assign'])
+        temp_clust.trees = [trees[t]]
+        temp_clust.analyse_trees_sparse2(sparsity,err)
+        this_tree = temp_clust.trees[0]
+        sparse_trees +=[cp.deepcopy(this_tree)]
+    write_to_dot('tree_number_'+str(t)+'.dot',this_tree,list(sample_names))
     with open('tree_number_'+str(t)+'.txt','w') as fi:
-        fi.write(str(trees[t]))
-pickle.dump(trees,open('bamse.pickle','w'))      
+       fi.write(str(this_tree))
+
+if (sparsity > 0. and sparsity < 1.):
+    pickle.dump(sparse_trees,open('bamse.pickle','w'))
+else:
+    pickle.dump(trees[:min(top_trees,len(trees))],open('bamse.pickle','w'))
