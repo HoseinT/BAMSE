@@ -27,7 +27,6 @@ from scipy.stats import beta
 import matplotlib.pyplot as plt
 import  os
 
-os.chdir(os.chdir(os.path.dirname(sys.argv[0])))
 class clustering:
 
     def __init__(self,variant_reads, normal_reads, assignments):
