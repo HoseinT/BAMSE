@@ -14,9 +14,9 @@ sequencing_error: sequencing error rate for ref -> var and vice versa
 
 sparsity: a number between zero and one that represent the prior probability that any subclone is absent at any sample, negative values are interpreted as zero
 
-num_trees: number of top KMeans clusterings to consider
-
 max_clusters: maximum number of clusters to consider
+
+num_trees: number of alternative clusterings to consider for each possible number of clusters
 
 top_trees: number of top solutions to produce output for
 
