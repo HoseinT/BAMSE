@@ -27,6 +27,9 @@ from scipy.stats import beta
 import matplotlib.pyplot as plt
 import  os
 
+
+
+#os.chdir(os.path.dirname(sys.argv[1]))
 class clustering:
 
     def __init__(self,variant_reads, normal_reads, assignments):
@@ -335,6 +338,7 @@ def sum_min_dif(x,y):
     return np.sum(np.minimum(np.zeros(len(x)),x-y))
 
 def get_all_trees(values,margin):
+    print margin
     K=len(values)
     M= len(values[0])
     result=[]
@@ -383,6 +387,7 @@ def get_all_trees(values,margin):
                             in subset])))
                                 newresult +=[newres]
         result = newresult
+    print len(result)
     return result
 
 
@@ -429,14 +434,210 @@ def unique_Kmeans_clustering(As,Bs,num_clusters,n_init):
     return result
 
 
+def table_expression(remheight, remwidth, border, orient, tree, node, vafs, colors):
+    bgcolors = ['white']+list(colors[1:])
+    res =''
+    if len(get_childs(tree,node))==0:
+        res += r'<td FIXEDSIZE="TRUE" HEIGHT="'+str(remheight)+r'" WIDTH="'+str(remwidth)+r'" border="'+str(border)+r'" color="'+colors[node]+'" bgcolor="'+bgcolors[node]+'"></td>'
+        res += '\n'
+        return res
+    else:
+        res += r'<td><table  FIXEDSIZE="TRUE" HEIGHT="'+str(remheight)+r'" WIDTH="'+str(remwidth)+r'" bgcolor="'+bgcolors[node]+'" border="'+str(border)+r"""" cellborder='0' color=""" +'"'+colors[node]+r"""" cellspacing='0' cellpadding='0'>"""
+        res += '\n'
+        childs = get_childs(tree,node)
+        proportion = vafs[node]- sum([vafs[child] for child in childs])
+        proportions = np.array([0.0,proportion]+[vafs[child] for child in childs])
+        proportions = proportions/sum(proportions)
+        cumprops = np.cumsum(proportions)
+        if orient == 'h':
+            res += r'<tr>'
+            effwidth = remwidth - border*(len(childs)+1)
+            effheight = remheight - 2*border
+            remwidths = np.diff(np.around(effwidth*cumprops,0)).astype(int)
+            if remwidths[0]> 2*border:
+                res +=r'<td FIXEDSIZE="TRUE" HEIGHT="'+str(effheight)+r'" WIDTH="'+str(remwidths[0])+r'" border="'+str(border)+r"""" color='white'></td>"""
+                res +='\n'
+            else:
+                remwidths[1] += border
+#             nodes_past =1
+
+            for ind in range(len(childs)):
+#                 print nodes_past
+                res += table_expression(effheight, remwidths[ind+1], border, 'v', tree, childs[ind], vafs, colors)
+#                 nodes_past = nodes_past+1+len(get_desc(tree, childs[ind]))
+            res +='\n'+r'</tr>'
+        if orient =='v':
+            effheight = remheight - border*(len(childs)+1)
+            effwidth = remwidth - 2*border
+            remheights = np.diff(np.around(effheight*cumprops,0)).astype(int)
+            if remheights[0]>2*border:
+                res += r'<tr>'
+                res +=r'<td FIXEDSIZE="TRUE" HEIGHT="'+str(remheights[0])+r'" WIDTH="'+str(effwidth)+r'" border="'+str(border)+r"""" color='white'></td>"""
+                res +='\n</tr>'
+            else:
+                remheights[1] += border
+#             nodes_past=1
+            for ind in range(len(childs)):
+                res += r'<tr>'
+                res += table_expression(remheights[ind+1], effwidth, border, 'h', tree, childs[ind], vafs,colors)
+#                 nodes_past = nodes_past+1+len(get_desc(tree, childs[ind]))
+                res +=r'</tr>'+'\n'
+            res +='\n'
+        res += '</table></td>'
+    return res
+            
+
+def put_sample_in_node(tree, vafs_tr, sample_names, sample_colors, cluster_colors, height=100, width=100, border=2, orient='v'):
+        res=''
+        for ind in range(len(sample_names)):
+            otree =[-1]+list((np.array(tree)+1).astype(int))
+            colors = tuple(["black"]+list(cluster_colors))
+            vafs = [1.0]+list(vafs_tr[ind])
+            existing_clones = [0]+[x for x in range(1,len(vafs)) if (vafs[x]>0.04)]
+            absent_clones = [x for x in range(len(vafs)) if x not in existing_clones]
+            for x in absent_clones:
+                otree[x] = -5
+            
+            res +=   sample_names[ind]+' [\n    shape=plaintext\n    xlabel ="'+sample_names[ind]+\
+            '"\n    label=<\n' + table_expression(height, width, border, 'v', otree, 0, vafs,colors)[4:-5]+\
+            '\n  >];'
+        return res
+    
+    
+def get_childs(tree,node):
+    return [x for x in range(len(tree)) if tree[x]==node]
+
+def get_desc(tree,node):
+    if len(get_childs(tree,node))==0:
+        return []
+    else:
+        return get_childs(tree,node)+reduce(lambda x,y:x+y,[get_desc(tree,x) for x in get_childs(tree,node)])
 
 
-inputfile = sys.argv[1]
-err = float(sys.argv[2])
-sparsity = float(sys.argv[3])
-n_trees = int(sys.argv[4])
-max_clusts= int(sys.argv[5])
-top_trees = int(sys.argv[6])
+def write_dot_files(dat,sample_colors, cluster_colors,treeoutfile,samplesoutfile):
+    res =  put_sample_in_node(dat['tree'],dat['vaf'].transpose(),dat['sample_names'],sample_colors,cluster_colors,height=150,width=150)
+    res = 'digraph {\n'+res+'}\n'
+    with open(samplesoutfile,'w') as fi:
+        fi.write(res)
+    res=''
+    clone_letters = [chr(x) for x in range(65,len(dat['tree'])+65)]
+    for x in range(len(dat['tree'])):
+        num_muts = len([y for y in dat['assign'] if y==x])
+        res += chart_plot(clone_letters[x],cluster_colors[x],dat['vaf'].transpose()[:,x],dat['sample_names'], sample_colors, num_muts)
+    res +='\n'
+    for x in range(len(dat['tree'])):
+        if not x==dat['root']:
+            res += 'Subclone'+clone_letters[int(dat['tree'][x])]+' -> Subclone'+clone_letters[x]+'\n'
+    res = 'digraph {\n'+res+'}\n'
+    with open(treeoutfile,'w') as fi:
+        fi.write(res)
+
+def collapse_node(t,n):
+    if not len(get_childs(t,n)) ==1:
+        raise 'can not collapse node with other than one child'
+        return
+    child = int([x for x in range(len(t)) if t[x]==n][0])
+    par = t[n]
+    res = cp.deepcopy(t)
+    res[child] = par
+    x = range(n)+range(n+1,len(t))
+    res = res[x]
+    for x in range(len(res)):
+        if res[x]>n:
+            res[x] -=1
+    return res
+
+def collapse_assign(c,n,ch):
+    res = cp.deepcopy(c)
+    for x in range(len(res)):
+        if res[x]==n:
+            res[x] = ch
+        if res[x] > n:
+            res[x] -= 1
+    return res
+
+def remove_zeros(tree):
+    sums = [sum(y) for y in tree['clone_proportions']]
+    ns = [n for n in range(len(sums)) if sums[n]<0.001]
+    nchilds = [len(get_childs(tree['tree'],n)) for n in ns]
+    while 1 in nchilds:
+        n = ns[nchilds.index(1)]
+        child = int([x for x in range(len(tree['tree'])) if tree['tree'][x]==n][0])
+        tree['tree'] = collapse_node(tree['tree'],n)
+        tree['assign'] = collapse_assign(tree['assign'],n,child)
+        tree['clone_proportions'] = np.delete(tree['clone_proportions'],n,0)
+        sums = [sum(y) for y in tree['clone_proportions']]
+        ns = [n for n in range(len(sums)) if sums[n]<0.001]
+        nchilds = [len(get_childs(tree['tree'],n)) for n in ns]
+    tree['Bmatrix'] = get_matrix(tree['tree'])[0]
+    tree['Amatrix'] = np.linalg.inv(tree['Bmatrix'])
+    return tree
+
+def chart_plot(subclone_letter,color,percentages,sample_names, sample_colors, num_muts, bar_width=30,border=3):
+    res = ''
+    res += 'Subclone'+subclone_letter+' [\n      shape=plaintext\n      label=<<table FIXEDSIZE="TRUE" HEIGHT="170" WIDTH="'+str(bar_width*len(sample_names)+60)+\
+    '" color="'+color+'" bgcolor="'+color+'" border="'+str(border)+'" cellborder="0" cellspacing="0">\n'
+    res +='<tr><td rowspan ="3">'+subclone_letter+'-'+str(num_muts)+' </td>\n'
+    for ind in range(len(sample_names)):
+        percent = int(100*percentages[ind])
+        if percent <100:
+            res +='<td FIXEDSIZE="TRUE" HEIGHT="110" WIDTH="'+str(bar_width)+\
+            '" cellpadding="0"><table cellspacing="0" cellpadding="0" cellborder="0" border="0"><tr><td '+\
+            'FIXEDSIZE="TRUE" HEIGHT="'+str(100-int(100*percentages[ind]))+'" WIDTH="'+str(bar_width-2)+\
+            '" > </td></tr>'
+        if percent > 2:
+            res +=' <tr><td FIXEDSIZE="TRUE" HEIGHT="'+str(int(100*percentages[ind]))+'" WIDTH="'+str(bar_width-2)+\
+        '" bgcolor="'+sample_colors[ind]+'" > </td></tr>'
+        res +='</table></td>'
+    res +='</tr><tr>'
+    for x in percentages:
+        res += '<td>'+str(int(np.around(100*x,0)))+'</td>'
+    res +='</tr><tr>'
+    for x in sample_names:
+        res += '<td>'+x+'</td>'
+    res +='</tr></table> \n>]'
+
+    return res
+
+
+import argparse
+
+parser = argparse.ArgumentParser(description='Generates likely tumor evolution histories given somatic readcounts.')
+parser.add_argument('infile', metavar='inputfile', type=str, nargs='+', help='an integer for the accumulator')
+parser.add_argument('-e', metavar='error', default=0.001, type=float,help='Sequencing error probability (Default:0.001)')
+
+parser.add_argument('-nc', metavar ='max_clusts', default=12, type=int, help='Maximum possible number of subclones')
+
+parser.add_argument('-s', metavar ='sparsity', default=-1, type=float,help='this controls sparsity of solutions, between 0. and .1, considered 0 otherwise')
+
+parser.add_argument('-n', metavar ='n_trees', default=3, type=int,help='Number of clusterings candidates analysed per number of clusters')
+
+parser.add_argument('-t', metavar ='top_trees', default=1, type=int,help='Number of top solutions to return')
+
+
+
+
+
+args = parser.parse_args()
+
+
+inputfile = args.infile[0]
+err = args.e
+sparsity = args.s
+n_trees = args.n
+max_clusts= args.nc
+top_trees = args.t
+
+
+
+
+
+#inputfile = sys.argv[1]
+#err = float(sys.argv[2])
+#sparsity = float(sys.argv[3])
+#n_trees = int(sys.argv[4])
+#max_clusts= int(sys.argv[5])
+#top_trees = int(sys.argv[6])
 
 print max_clusts
 table_data = pd.read_table(inputfile)
@@ -444,6 +645,14 @@ max_clusts = min(len(table_data),max_clusts)
 pf = part_func(len(table_data),max_clusts)
 print len(table_data),pf
 tree_numbers = np.array([1, 1, 1, 2, 4, 9, 20, 47, 108, 252, 582, 1345, 3086, 7072, 16121, 36667, 83099, 187885, 423610, 953033, 2139158, 4792126, 10714105, 23911794, 53273599, 118497834, 263164833, 583582570])
+
+cluster_colors = ["plum", "lightyellow", "palegreen", "pink", "paleturquoise", "tan", "moccasin",\
+                  "lightcyan3", "oldlace", "palevioletred", "olivedrab1", "lightgray", "steelblue1"]
+
+sample_colors = ["red", "firebrick4", "brown4", "darkgoldenrod4" ,"deeppink1",\
+                 "darkgreen", "cyan4", "darkorchid", "blue", "dimgray"]   
+
+
 ref_cols=[re.match('(.*)?.ref',x) for x in table_data.columns.values]
 var_cols=[re.match('(.*)?.var',x) for x in table_data.columns.values]
 ref_names =[x.string.replace('.ref','') for x in filter(None,ref_cols)]
@@ -494,7 +703,12 @@ for t in range(min(top_trees,len(trees))):
         temp_clust.analyse_trees_sparse2(sparsity,err)
         this_tree = temp_clust.trees[0]
         sparse_trees +=[cp.deepcopy(this_tree)]
-    write_to_dot('tree_number_'+str(t)+'.dot',this_tree,list(sample_names))
+        this_tree = remove_zeros(this_tree)
+    this_tree = remove_zeros(this_tree)
+    this_tree['vaf'] = this_tree['Bmatrix'].dot(this_tree['clone_proportions'])
+    
+    write_dot_files(this_tree,sample_colors,cluster_colors,'tree_number_'+str(t)+'_subclones.dot','tree_number_'+str(t)+'_samples.dot')
+#    write_to_dot('tree_number_'+str(t)+'.dot',this_tree,list(sample_names))
     with open('tree_number_'+str(t)+'.txt','w') as fi:
        fi.write(str(this_tree))
 
