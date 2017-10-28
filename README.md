@@ -16,7 +16,7 @@ sparsity: a number between zero and one that represent the prior probability tha
 
 num_trees: number of top KMeans clusterings to consider
 
-max_clusters: maximum number of clusters to consider for KMeans
+max_clusters: maximum number of clusters to consider
 
 top_trees: number of top solutions to produce output for
 
