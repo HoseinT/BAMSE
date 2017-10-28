@@ -4,9 +4,10 @@ BAyesian Model SElection for Inferring the subclonal history of tumor samples
 Usage:
 =====
 
-python2.x bamse.py inputfile sequencing_error sparsity num_trees max_clusters top_trees
-
-
+usage: bamse.py [-h] [-e error] [-nc max_clusts] [-s sparsity] [-n n_trees]
+                [-t top_trees]
+                inputfile [inputfile ...]
+                
 inputfile: a tab delimited file including with somatic mutations as rows and columns named sample_name.ref for reference reads and sample_name.var for each sample
 
 sequencing_error: sequencing error rate for ref -> var and vice versa
@@ -25,4 +26,4 @@ Output:
 
 dot files for visualization with graphviz
 
-pickle files to load with python 
+text files and pickle files to load with python, one per tree, describing the trees.  
