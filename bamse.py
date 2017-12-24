@@ -49,11 +49,11 @@ top_trees = args.t
 # max_clusts= 10
 # top_trees = 1
 
-print max_clusts
+print(max_clusts)
 table_data = pd.read_table(inputfile)
 max_clusts = min(len(table_data),max_clusts)
 pf = part_func(len(table_data),max_clusts)
-print len(table_data),pf
+print(len(table_data),pf)
 
 
 cluster_colors = ["plum", "lightyellow", "palegreen", "pink", "paleturquoise", "tan", "moccasin", "lightcyan3", "oldlace", "palevioletred", "olivedrab1", "lightgray", "steelblue1"]
@@ -68,33 +68,33 @@ var_names =[x.string.replace('.var','') for x in filter(None,var_cols)]
 sample_names = set.intersection(set(ref_names),set(var_names))
 sample_names = list(sample_names)
 sample_names.sort()
-print sample_names
+print(sample_names)
 X={'As':table_data[[x+'.var' for x in sample_names]].as_matrix(),'Bs':table_data[[x+'.ref' for x in sample_names]].as_matrix()}
-print X['As'].shape
+print(X['As'].shape)
 clusterings = []
 for K in range(1,max_clusts+1):
     Y = (X['As']+0.0)/(X['Bs']+X['As'])
-    print Y.shape
+    print(Y.shape)
     score = -1*float("inf")
     assign = KMeans(n_clusters=K,n_init=100).fit(Y).labels_
     clusterings += [clustering(X['As'],X['Bs'],assign,pf,err)]
     raw_scores= np.array([x.cluster_prior + x.maxlikelihood for x in clusterings])
-    print raw_scores
+    print(raw_scores)
 if np.any(np.diff(raw_scores)<0):
     candidate_numbers = raw_scores.argsort()[-3:]
 else:
     candidate_numbers = [max_clusts]
-print 'possible number of clusters:' , candidate_numbers
+print('possible number of clusters:' , candidate_numbers)
 clusts = []
 for x in candidate_numbers:
    clusts += list(unique_Kmeans_clustering(X['As'],X['Bs'],x,n_trees,pf,err))
 for x,clust in enumerate(clusts):
-   print 'analysis clustering: ' +str(x+1) +' of '+str(len(clusts))
+   print ('analysis clustering: ' +str(x+1) +' of '+str(len(clusts)))
 #   clust.get_t_normals(err)
 #    clust.get_trees()
    clust.get_candidate_tree()
    clust.get_trees2(clust.trees[0])
-   print len(clust.trees)
+   print(len(clust.trees))
     
 #   if sparsity <0 :
    clust.analyse_trees_regular2()

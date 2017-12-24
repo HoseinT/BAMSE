@@ -4,6 +4,7 @@
 import numpy as np
 import copy as cp
 import itertools
+import functools
 
 def indexTobinary(inds, length):
     """ input a set of indexes and output a list with those indices set to one"""
@@ -85,7 +86,7 @@ def sim_data_readcounts(K, M, altrees, num_mut, coverage=200, min_in_clust=2, er
     true_cm = np.array([B.dot(x) for x in true_sm])
     true_cm = true_cm.transpose()
     ps = np.random.dirichlet(np.ones(K))
-    assign = np.random.choice(range(K), num_mut-min_in_clust*K, p=ps)
+    assign = np.random.choice(np.arange(K), num_mut-min_in_clust*K, p=ps)
     assign = np.concatenate((np.repeat(np.arange(K), min_in_clust), assign))
     np.random.shuffle(assign)
     covs = coverage*np.ones((num_mut, M)).astype(int)
@@ -110,7 +111,7 @@ def get_desc(tree,node):
     if len(get_childs(tree, node)) == 0:
         return []
     else:
-        return get_childs(tree, node)+reduce(lambda x, y: x+y, [get_desc(tree, x) \
+        return get_childs(tree, node)+functools.reduce(lambda x, y: x+y, [get_desc(tree, x) \
         for x in get_childs(tree, node)])
 
 
@@ -122,7 +123,7 @@ def collapse_node(t,n):
     par = t[n]
     res = cp.deepcopy(t)
     res[child] = par
-    x = range(n)+range(n+1, len(t))
+    x = [y for y in range(n)]+[y for y in range(n+1, len(t))]
     res = res[x]
     for x in range(len(res)):
         if res[x] > n:

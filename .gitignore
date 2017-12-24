@@ -1,2 +1,8 @@
 .Rhistory
 .unimodality_test_ccrcc.R
+tree_numbe*
+Pipfile*
+__pycache__
+bamse_output.txt
+bamse.pickle
+*.pyc

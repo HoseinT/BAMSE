@@ -9,6 +9,7 @@ import copy as cp
 from scipy.misc import comb, logsumexp
 import cvxpy as cvx
 from math import factorial
+import functools
 
 tree_numbers = np.array([1, 1, 1, 2, 4, 9, 20, 47, 108, 252, 582, 1345, 3086, 7072, 16121, 36667, 83099, 187885, 423610, 953033, 2139158, 4792126, 10714105, 23911794, 53273599, 118497834, 263164833, 583582570])
 
@@ -31,7 +32,7 @@ class clustering:
         #### aggregate reads for each cluster + determine subclone order for heuristic search
         self.As = np.array([np.sum(self.am[self.assign == x], 0) for x in range(max(self.assign)+1)])
         self.Bs = np.array([np.sum(self.bm[self.assign == x], 0) for x in range(max(self.assign)+1)])
-        self.order = sorted(np.unique(self.assign), self.compare_clusters)
+        self.order = sorted(np.unique(self.assign), key = self.mean_average)
 
         ### reorder subclones
         self.assign = np.array([self.order.index(x) for x in self.assign])
@@ -58,6 +59,12 @@ class clustering:
         np.ones(2), self.As[[clustB, clustA], :], self.Bs[[clustB, clustA], :], self.err, 0.0))\
         - np.sum(tree_integrate_multisample(np.array([-1., 0.]), \
         np.ones(2), self.As[[clustA, clustB], :], self.Bs[[clustA, clustB], :], self.err, 0.0))))
+    
+    def mean_average(self,clust):
+        As = np.array([np.sum(self.am[self.assign == x], 0) for x in range(max(self.assign)+1)])
+        Bs = np.array([np.sum(self.bm[self.assign == x], 0) for x in range(max(self.assign)+1)])
+        return 1.0 - np.mean((As +0.)/(As + Bs))
+        
 
     def get_candidate_tree(self):
         """ Get an initial Heuristic Tree"""
@@ -66,7 +73,7 @@ class clustering:
             self.trees = [{'tree':tree, 'root':0}]
             return [{'tree':tree, 'root':0}]
         for n in range(1, len(self.order)):
-            scores = [get_tree_score(tree+[x], range(n+1), self.As, self.Bs, self.err) for x in range(n)]
+            scores = [get_tree_score(tree+[x], [y for y in range(n+1)], self.As, self.Bs, self.err) for x in range(n)]
             tree += [np.argmax(scores)]
         self.trees = [{'tree':tree, 'root':0}]
         return [{'tree':tree, 'root':0}]
@@ -74,7 +81,7 @@ class clustering:
     def get_trees2(self, candidate_tree):
         """ Get all the trees that have a larger score than candidate_tree"""
         K, M = self.As.shape
-        score = get_tree_score(candidate_tree['tree'], range(K), self.As, self.Bs, self.err) + \
+        score = get_tree_score(candidate_tree['tree'], [y for y in range(K)], self.As, self.Bs, self.err) + \
         np.log(canonizeF(candidate_tree['tree'])['scre'])
         allts = []
         for rootnode in range(K):
@@ -93,12 +100,12 @@ class clustering:
                         self.Bs, self.err) for x in candidate_t.values])
                         if candidate_score + np.log(factorial(candidate_t.number_of_leaves()))\
                          >= score:
-                            print 'scores=', candidate_score, score
-                            print 'trees =', candidate_t.values, candidate_tree['tree']
+                            print('scores=', candidate_score, score)
+                            print('trees =', candidate_t.values, candidate_tree['tree'])
                             new_ts += [candidate_t]
                 ts = new_ts
             allts += ts
-        self.trees = [{'tree':reorder_tree(t.values[0]['tree'], t.values[0]['nodes'], range(K)),\
+        self.trees = [{'tree':reorder_tree(t.values[0]['tree'], t.values[0]['nodes'], [y for y in range(K)]),\
         'root':t.values[0]['nodes'][t.values[0]['tree'].index(-1)]} for t in allts \
         if get_tree_score(t.values[0]['tree'], t.values[0]['nodes'], self.As, self.Bs, self.err) + \
         np.log(canonizeF(t.values[0]['tree'])['scre']) >= score]
@@ -153,7 +160,7 @@ class treeset:
         self.values= []
         for x in range(length):
             self.values +=  [{'tree':[-1],'nodes':[x],'root':[x]}]
-        self.node_assigns = range(length)
+        self.node_assigns = [y for y in range(length)]
 
     def join_root_to_node(treeset,root,node):
         #### places root under node and returns a new treeset
@@ -163,12 +170,12 @@ class treeset:
         tree1 = new_treeset.values[ind1]
         tree2 = new_treeset.values[ind2]
         if not tree2['tree'][tree2['nodes'].index(root)] == -1:
-            print 'Error: the root argumnet must be a root in the treeset'
+            print('Error: the root argumnet must be a root in the treeset')
             return
         if ind1 ==ind2 :
-            print 'Error: select two distict trees'
+            print('Error: select two distict trees')
             return
-        tree = [x+len(tree1['tree']) if not x==-1 else                 tree1['nodes'].index(node) for x in tree2['tree']]
+        tree = [x+len(tree1['tree']) if not x==-1 else tree1['nodes'].index(node) for x in tree2['tree']]
         tree = tree1['tree']+tree
         nodes = tree1['nodes']+tree2['nodes']
         root = tree1['root']
@@ -235,7 +242,7 @@ def trap_int(xs):
 def my_convolve(a,b):
     l=len(a)
     if not l == len(b):
-        print "vector must be of same length for this function"
+        print("vector must be of same length for this function")
         return
     return np.array([logsumexp(b[:x+1]+a[x::-1]) for x in range(l)]) - np.log(l)
 
@@ -266,7 +273,7 @@ def eval_int(tree,node,distribs,starred):
             ch0= eval_int(tree,childs[0],distribs,starred)
         else:
             ch0= trap_int(eval_int(tree,childs[0],distribs,starred))
-        return distribs[node] + reduce(lambda x,y:my_convolve(x,y),[ch0]+[eval_int(tree,x,distribs,starred) for x         in childs[1:]])
+        return distribs[node] + functools.reduce(lambda x,y:my_convolve(x,y),[ch0]+[eval_int(tree,x,distribs,starred) for x         in childs[1:]])
 
 
 def tree_integrate_single_sample(tree,b,distribs,p):
