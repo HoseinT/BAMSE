@@ -32,7 +32,7 @@ class clustering:
         #### aggregate reads for each cluster + determine subclone order for heuristic search
         self.As = np.array([np.sum(self.am[self.assign == x], 0) for x in range(max(self.assign)+1)])
         self.Bs = np.array([np.sum(self.bm[self.assign == x], 0) for x in range(max(self.assign)+1)])
-        self.order = sorted(np.unique(self.assign), key = self.mean_average)
+        self.order = sorted(np.unique(self.assign), key = functools.cmp_to_key(self.compare_clusters))
 
         ### reorder subclones
         self.assign = np.array([self.order.index(x) for x in self.assign])

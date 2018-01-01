@@ -125,5 +125,4 @@ if (sparsity > 0. and sparsity < 1.):
     pickle.dump(sparse_trees,open('bamse.pickle','w'))
     write_text_output(sparse_trees,'bamse_output.txt')
 else:
-    pickle.dump(trees[:min(top_trees,len(trees))],open('bamse.pickle','w'))
     write_text_output(trees[:min(top_trees,len(trees))],'bamse_output.txt')

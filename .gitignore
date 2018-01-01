@@ -3,6 +3,7 @@
 tree_numbe*
 Pipfile*
 __pycache__
+.vscode
 bamse_output.txt
 bamse.pickle
 *.pyc
