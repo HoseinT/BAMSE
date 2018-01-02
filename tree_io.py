@@ -1,5 +1,6 @@
 """ This file contatins functions for writing output files"""
 from tree_tools import *
+from asciitree import LeftAligned
 import numpy as np
 import pickle
 
@@ -113,13 +114,27 @@ def chart_plot(subclone_letter,color,percentages,sample_names, sample_colors, nu
 
     return res
 
+def get_asciitree_dict(tree,labels,node):
+    return {labels[x]:get_asciitree_dict(tree,labels,x) for x in get_childs(tree,node)}
+
+def get_ascii_tree(tree,labels):
+    root = list(tree).index(-1)
+    tree_dict =  {labels[root]:get_asciitree_dict(tree,labels,root)}
+    tr = LeftAligned()
+    return tr(tree_dict)
+
 def write_text_output(data,destfile):
     with open(destfile,'w') as fi:
         for i,tree in enumerate(data):
             fi.write('Solution Number '+str(i+1)+'\n')
             fi.write('tree = ' + str(tree['tree']) + '\n')
+            depth = get_tree_depth(tree['tree'])
+            print_depth = max(depth) - np.array(depth) + 1
+            labels = [chr(x+65)+' '*4*print_depth[x] + \
+            str(np.around(tree['VAF'][x,:],2)) for x in range(len(tree['tree']))]
+            fi.write(get_ascii_tree(tree['tree'],labels)+'\n')
             fi.write('logscore = '+ str(tree['totalscore']) + '\n')
-            fi.write('ML Subclone Fractions = ' + str(tree['clone_proportions']) + '\n' )
+            fi.write('ML Subclone Fractions = \n' + str(tree['clone_proportions']) + '\n' )
             fi.write ('Mutations Subclone Membership = ' + str([chr(x+65) for x in tree['assign']]) + '\n')
             fi.write('----------------------------------------------------------------')
     return

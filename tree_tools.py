@@ -114,6 +114,21 @@ def get_desc(tree,node):
         return get_childs(tree, node)+functools.reduce(lambda x, y: x+y, [get_desc(tree, x) \
         for x in get_childs(tree, node)])
 
+def get_tree_depth(tree):
+    root = list(tree).index(-1)
+    levels = [1 for x in range(len(tree))]
+    nodes = [root]
+    front_nodes = set()
+    front_nodes.add(root)
+    while front_nodes:
+        node = list(front_nodes)[0] 
+        childs = get_childs(tree,node)
+        for child in childs:
+            front_nodes.add(child)
+            levels[child] = levels[node] + 1
+        front_nodes.remove(node)
+    return levels
+
 
 def collapse_node(t,n):
     """ Removes a node "n" with one child from tree "t" and output the resulting tree"""

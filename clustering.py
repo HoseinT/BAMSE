@@ -2,6 +2,7 @@
 """The clustering class is defined here,  it defines a clustering, the prior
 and the error model for the clustering"""
 from tree_tools import *
+from tree_io import get_ascii_tree
 import numpy as np
 import itertools
 from scipy.special import gammaln
@@ -32,7 +33,7 @@ class clustering:
         #### aggregate reads for each cluster + determine subclone order for heuristic search
         self.As = np.array([np.sum(self.am[self.assign == x], 0) for x in range(max(self.assign)+1)])
         self.Bs = np.array([np.sum(self.bm[self.assign == x], 0) for x in range(max(self.assign)+1)])
-        self.order = sorted(np.unique(self.assign), key = functools.cmp_to_key(self.compare_clusters))
+        self.order = sorted(np.unique(self.assign), key=functools.cmp_to_key(self.compare_clusters))
 
         ### reorder subclones
         self.assign = np.array([self.order.index(x) for x in self.assign])
@@ -59,8 +60,8 @@ class clustering:
         np.ones(2), self.As[[clustB, clustA], :], self.Bs[[clustB, clustA], :], self.err, 0.0))\
         - np.sum(tree_integrate_multisample(np.array([-1., 0.]), \
         np.ones(2), self.As[[clustA, clustB], :], self.Bs[[clustA, clustB], :], self.err, 0.0))))
-    
-    def mean_average(self,clust):
+
+    def mean_average(self, clust):
         As = np.array([np.sum(self.am[self.assign == x], 0) for x in range(max(self.assign)+1)])
         Bs = np.array([np.sum(self.bm[self.assign == x], 0) for x in range(max(self.assign)+1)])
         return 1.0 - np.mean((As +0.)/(As + Bs))
@@ -122,6 +123,7 @@ class clustering:
             tree['assign'] = self.assign
             score = np.sum(tree_integrate_multisample(tree = tree['tree'], b = np.ones(K), As = self.As, Bs = self.Bs , err = self.err, p= 0. ))
             get_max_values_r2(tree, self.As,self.Bs, self.err)
+            tree['VAF'] = tree['Bmatrix'].dot(tree['clone_proportions'])
             tree['score'] = score +np.log(canonizeF(tree['tree'])['scre'])
             tree['totalscore']= tree['score']+self.cluster_prior +             self.maxlikelihood
 
@@ -162,9 +164,9 @@ class treeset:
             self.values +=  [{'tree':[-1],'nodes':[x],'root':[x]}]
         self.node_assigns = [y for y in range(length)]
 
-    def join_root_to_node(treeset,root,node):
+    def join_root_to_node(self,root,node):
         #### places root under node and returns a new treeset
-        new_treeset = cp.deepcopy(treeset)
+        new_treeset = cp.deepcopy(self)
         ind1 = new_treeset.node_assigns[node]
         ind2 = new_treeset.node_assigns[root]
         tree1 = new_treeset.values[ind1]
@@ -190,13 +192,98 @@ class treeset:
                     new_treeset.node_assigns[i] -= 1
 
         return new_treeset
-    
+
     def number_of_leaves(self):
         leaves = 0
         for value in self.values:
             tree = value['tree']
             leaves += len([x for x in range(len(tree)) if x not in tree])
-        return leaves
+        return leaves    
+
+class prufer_treeset():
+    """ The class for prufer treesets, for generating all labeled trees using prufer sequence.
+    this is treeset with following exceptions:
+    - it has a defined set of leaves
+    - in each step a root in the treeset is joined as the child to the root of another
+    - this way we can have faster evaluations in exchange for memory
+    - integrations inside the class
+    - rc_distibs hold the convolution of distribs for all childs of a root at each time"""
+
+    def __init__(self,length,leaves,distribs):
+        """ length is the number of subclones, leaves are the indices of leaf nodes and 
+        distribs is the list of distributios for each subclone"""
+        self.length = length
+        self.values= []
+        for x in range(length):
+            self.values +=  [{'tree':[-1],'nodes':[x],'root':x,'rc_distrib': None}]
+        self.node_assigns = [y for y in range(length)]
+        self.uleaves = set(leaves)      # unattached leaves
+        self.remnodes = set([x for x in range(self.length) if x not in leaves]) # set of remaining nodes
+        self.spent_nodes = set()
+        self.rem_choices = self.length - 1  #number of remaining choices
+        self.distribs = distribs
+
+    def __repr__(self):
+        """  represenation of the class"""
+        return '\n'.join([get_ascii_tree(x['tree'],x['nodes']) for x in self.values])+'\n_________________\n'
+
+    def join_root_to_node(self, rnode, node):
+        new_treeset = cp.deepcopy(self)
+        ind1 = new_treeset.node_assigns[node]
+        ind2 = new_treeset.node_assigns[rnode]
+        tree1 = new_treeset.values[ind1]
+        tree2 = new_treeset.values[ind2]
+        if not tree2['tree'][tree2['nodes'].index(rnode)] == -1:
+            print('Error: the root argumnet must be a root in the treeset')
+            return
+        if ind1 ==ind2 :
+            print('Error: select two distict trees')
+            return
+        tree = [x+len(tree1['tree']) if not x==-1 else tree1['nodes'].index(node) for x in tree2['tree']]
+        tree = tree1['tree']+tree
+        nodes = tree1['nodes']+tree2['nodes']
+        root = tree1['root']
+        new_treeset.values = [i for j, i in enumerate(new_treeset.values) if j not in [ind1,ind2]]
+        new_treeset.values += [{'tree':tree,'nodes':nodes,'root':root}]
+        for i,x  in enumerate(new_treeset.node_assigns):
+            if x in [ind1,ind2]:
+                new_treeset.node_assigns[i] = len(new_treeset.values)-1 
+            elif x>min(ind1,ind2):
+                new_treeset.node_assigns[i] -= 1
+                if x>max(ind1,ind2):
+                    new_treeset.node_assigns[i] -= 1
+        new_treeset.uleaves.remove(rnode)
+        new_treeset.spent_nodes.add(rnode)
+        new_treeset.rem_choices -= 1
+        return new_treeset
+
+    def spawn(self,current_score):
+        """ performs the branch and bound algorithm using the current score
+        output is a list of prufer_treesets"""
+        child = min(self.uleaves)
+        result = []
+        for parent in self.remnodes:
+            new_treeset = self.join_root_to_node(child,parent)
+            if (not new_treeset.uleaves) or (new_treeset.rem_choices < len(new_treeset.remnodes)):
+                new_treeset.remnodes.remove(parent)
+                new_treeset.uleaves.add(parent)
+                result += [new_treeset]
+            else:
+                new_treeset2 = cp.deepcopy(new_treeset)
+                new_treeset.remnodes.remove(parent)
+                new_treeset.uleaves.add(parent)
+                result += [new_treeset, new_treeset2]
+        return result
+
+
+
+
+
+
+
+
+
+
     
 # def distrib(a,b,err,length = 2048):
 #     x = np.linspace(0,1,length)
