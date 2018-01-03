@@ -93,7 +93,7 @@ for x,clust in enumerate(clusts):
 #   clust.get_t_normals(err)
 #    clust.get_trees()
    clust.get_candidate_tree()
-   clust.get_trees2(clust.trees[0])
+   clust.get_trees3(clust.trees[0])
    print(len(clust.trees))
     
 #   if sparsity <0 :

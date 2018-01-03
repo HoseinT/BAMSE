@@ -131,7 +131,7 @@ def write_text_output(data,destfile):
             depth = get_tree_depth(tree['tree'])
             print_depth = max(depth) - np.array(depth) + 1
             labels = [chr(x+65)+' '*4*print_depth[x] + \
-            str(np.around(tree['VAF'][x,:],2)) for x in range(len(tree['tree']))]
+            str(np.around(tree['vaf'][x,:],2)) for x in range(len(tree['tree']))]
             fi.write(get_ascii_tree(tree['tree'],labels)+'\n')
             fi.write('logscore = '+ str(tree['totalscore']) + '\n')
             fi.write('ML Subclone Fractions = \n' + str(tree['clone_proportions']) + '\n' )

@@ -12,11 +12,13 @@ import cvxpy as cvx
 from math import factorial
 import functools
 
-tree_numbers = np.array([1, 1, 1, 2, 4, 9, 20, 47, 108, 252, 582, 1345, 3086, 7072, 16121, 36667, 83099, 187885, 423610, 953033, 2139158, 4792126, 10714105, 23911794, 53273599, 118497834, 263164833, 583582570])
+tree_numbers = np.array([1, 1, 1, 2, 4, 9, 20, 47, 108, 252, 582, 1345,\
+ 3086, 7072, 16121, 36667, 83099, 187885, 423610, 953033, 2139158, 4792126,\
+  10714105, 23911794, 53273599, 118497834, 263164833, 583582570])
 
 class clustering:
 
-    def __init__(self, variant_reads, normal_reads, assignments,pf,err):
+    def __init__(self, variant_reads, normal_reads, assignments, pf, err):
         # am and bmm are mutationsXsamples matrices for variant and normal reads
         self.am = np.array(variant_reads)
         self.bm = np.array(normal_reads)
@@ -80,7 +82,9 @@ class clustering:
         return [{'tree':tree, 'root':0}]
 
     def get_trees2(self, candidate_tree):
-        """ Get all the trees that have a larger score than candidate_tree"""
+        """ Get all the trees that have a larger score than candidate_tree
+        generating trees using the construction method in pitman double counting proof
+        for Cayley's formula """
         K, M = self.As.shape
         score = get_tree_score(candidate_tree['tree'], [y for y in range(K)], self.As, self.Bs, self.err) + \
         np.log(canonizeF(candidate_tree['tree'])['scre'])
@@ -112,6 +116,23 @@ class clustering:
         np.log(canonizeF(t.values[0]['tree'])['scre']) >= score]
         return self.trees
 
+    def get_trees3(self, candidate_tree):
+        """ Get all the trees that have a larger score than candidate_tree
+        generating trees using the construction method in prufer_treeset class """
+        K, M = self.As.shape
+        distribs = np.array([[distrib(self.As[x, m], self.Bs[x, m], self.err) for m in range(M)] \
+        for x in range(K)])
+        score = get_tree_score(candidate_tree['tree'], [y for y in range(K)], self.As, self.Bs, \
+        self.err)
+        results = []
+        for number_of_clones in range(1, K):
+            leaf_sets = [x for x in itertools.combinations(range(K), number_of_clones)]
+            for leaf_set in leaf_sets:
+                sample_prufer = prufer_treeset(K, list(leaf_set), distribs)
+                results += sample_prufer.spawn_all_the_way(score)
+        return results
+
+
     def analyse_trees_regular2(self):
         """ get tree metrices, comute model posterior and ML values without the sparsity"""
         K, M = self.As.shape
@@ -123,7 +144,7 @@ class clustering:
             tree['assign'] = self.assign
             score = np.sum(tree_integrate_multisample(tree = tree['tree'], b = np.ones(K), As = self.As, Bs = self.Bs , err = self.err, p= 0. ))
             get_max_values_r2(tree, self.As,self.Bs, self.err)
-            tree['VAF'] = tree['Bmatrix'].dot(tree['clone_proportions'])
+            tree['vaf'] = tree['Bmatrix'].dot(tree['clone_proportions'])
             tree['score'] = score +np.log(canonizeF(tree['tree'])['scre'])
             tree['totalscore']= tree['score']+self.cluster_prior +             self.maxlikelihood
 
@@ -214,26 +235,31 @@ class prufer_treeset():
         distribs is the list of distributios for each subclone"""
         self.length = length
         self.values= []
-        for x in range(length):
-            self.values +=  [{'tree':[-1],'nodes':[x],'root':x,'rc_distrib': None}]
         self.node_assigns = [y for y in range(length)]
         self.uleaves = set(leaves)      # unattached leaves
         self.remnodes = set([x for x in range(self.length) if x not in leaves]) # set of remaining nodes
         self.spent_nodes = set()
         self.rem_choices = self.length - 1  #number of remaining choices
         self.distribs = distribs
+        self.M = distribs.shape[1]
+        for x in range(length):
+            self.values +=  [{'tree':[-1],'nodes':[x],'root':x,'rc_distrib': None,\
+            'r_distrib': self.distribs[x,:,:],'sum_distrib':sum([logsumexp(self.distribs[x,m,:]) for m in range(self.M)])}]
 
     def __repr__(self):
         """  represenation of the class"""
         return '\n'.join([get_ascii_tree(x['tree'],x['nodes']) for x in self.values])+'\n_________________\n'
 
-    def join_root_to_node(self, rnode, node):
+    def join_root_to_node(self, rnode, node, subtree_lookup_dict):
         new_treeset = cp.deepcopy(self)
         ind1 = new_treeset.node_assigns[node]
         ind2 = new_treeset.node_assigns[rnode]
         tree1 = new_treeset.values[ind1]
         tree2 = new_treeset.values[ind2]
         if not tree2['tree'][tree2['nodes'].index(rnode)] == -1:
+            print('Error: the root argumnet must be a root in the treeset')
+            return
+        if not tree1['tree'][tree1['nodes'].index(node)] == -1:
             print('Error: the root argumnet must be a root in the treeset')
             return
         if ind1 ==ind2 :
@@ -244,7 +270,21 @@ class prufer_treeset():
         nodes = tree1['nodes']+tree2['nodes']
         root = tree1['root']
         new_treeset.values = [i for j, i in enumerate(new_treeset.values) if j not in [ind1,ind2]]
-        new_treeset.values += [{'tree':tree,'nodes':nodes,'root':root}]
+        
+        # rnode_distrib = self.distribs[rnode,:,:]
+        # if tree2['rc_distrib'] is not None:
+        #     rnode_distrib += tree2['rc_distrib']
+        if tree1['rc_distrib'] is None:
+            new_rc_distrib = np.array([trap_int(tree2['r_distrib'][m,:]) for m in range(self.M)])
+        else:
+            new_rc_distrib = np.array([my_convolve(tree2['r_distrib'][m,:],tree1['rc_distrib'][m,:])\
+            for m in range(self.M)])
+        
+        new_distrib = new_rc_distrib + self.distribs[root,:,:]
+        new_sum_distrib = sum([logsumexp(new_distrib[m,:]) for m in range(self.M)])
+        new_treeset.values += [{'tree':tree,'nodes':nodes,'root':root, \
+        'r_distrib': new_distrib, 'rc_distrib': new_rc_distrib, 'sum_distrib':new_sum_distrib}]
+
         for i,x  in enumerate(new_treeset.node_assigns):
             if x in [ind1,ind2]:
                 new_treeset.node_assigns[i] = len(new_treeset.values)-1 
@@ -264,24 +304,35 @@ class prufer_treeset():
         result = []
         for parent in self.remnodes:
             new_treeset = self.join_root_to_node(child,parent)
-            if (not new_treeset.uleaves) or (new_treeset.rem_choices < len(new_treeset.remnodes)):
-                new_treeset.remnodes.remove(parent)
-                new_treeset.uleaves.add(parent)
-                result += [new_treeset]
-            else:
-                new_treeset2 = cp.deepcopy(new_treeset)
-                new_treeset.remnodes.remove(parent)
-                new_treeset.uleaves.add(parent)
-                result += [new_treeset, new_treeset2]
+            if sum([x['sum_distrib'] for x in new_treeset.values]) > current_score:
+                print('score =', sum([x['sum_distrib'] for x in new_treeset.values]), 'current score=', current_score)
+                print(self.__repr__())
+                if (not new_treeset.uleaves) or (new_treeset.rem_choices < len(new_treeset.remnodes)):
+                    new_treeset.remnodes.remove(parent)
+                    new_treeset.uleaves.add(parent)
+                    result += [new_treeset]
+                else:
+                    new_treeset2 = cp.deepcopy(new_treeset)
+                    new_treeset.remnodes.remove(parent)
+                    new_treeset.uleaves.add(parent)
+                    result += [new_treeset, new_treeset2]
         return result
 
-
-
-
-
-
-
-
+    def spawn_all_the_way(self,current_score):
+        """ spawnes (connects two trees in treeset) untill the treeset has just one tree
+        in each step checks whether the maximum reachable score is not less than current score"""
+        rem_choices = self.rem_choices
+        trees = [self]
+        while rem_choices>0:
+            next_trees = []
+            for tree in trees:
+                next_trees += tree.spawn(current_score)
+            trees = next_trees
+            if trees:
+                rem_choices = trees[0].rem_choices
+            else:
+                break
+        return trees
 
 
     

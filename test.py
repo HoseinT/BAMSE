@@ -2,19 +2,19 @@ from clustering import *
 from tree_io import get_ascii_tree
 from itertools import combinations
 
-K=6
+K=5
 alltrees = 0
 for m in range(1,K): 
     leaf_sets = [x for x in itertools.combinations(range(K),m)]
     for leaf_set in leaf_sets:
-        sample_prufer = prufer_treeset(K,list(leaf_set),None)
+        sample_prufer = prufer_treeset(K,list(leaf_set),np.zeros((K,1,1)))
         values = sample_prufer.values
         rem_choices = sample_prufer.rem_choices
         trees = [sample_prufer]
         while rem_choices>0:
             next_trees = []
             for tree in trees:
-                next_trees += tree.spawn(10)
+                next_trees += tree.spawn(-1000)
             trees = next_trees
             rem_choices = trees[0].rem_choices
         # for x in trees:
@@ -23,3 +23,4 @@ for m in range(1,K):
         alltrees += len(trees)
 print(alltrees)
 print(K**(K-1))
+print(hash(sample_prufer))
