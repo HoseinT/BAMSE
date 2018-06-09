@@ -12,6 +12,7 @@ import cvxpy as cvx
 from math import factorial
 import functools
 
+#tree_numbers is the sequence of number of unlabeled rooted trees 
 tree_numbers = np.array([1, 1, 1, 2, 4, 9, 20, 47, 108, 252, 582, 1345,\
  3086, 7072, 16121, 36667, 83099, 187885, 423610, 953033, 2139158, 4792126,\
   10714105, 23911794, 53273599, 118497834, 263164833, 583582570])
@@ -33,14 +34,14 @@ class clustering:
         K = max(assignments) + 1
 
         #### aggregate reads for each cluster + determine subclone order for heuristic search
-        self.As = np.array([np.sum(self.am[self.assign == x], 0) for x in range(max(self.assign)+1)])
-        self.Bs = np.array([np.sum(self.bm[self.assign == x], 0) for x in range(max(self.assign)+1)])
+        self.As = np.array([np.sum(self.am[self.assign == x], 0) for x in range(K)])
+        self.Bs = np.array([np.sum(self.bm[self.assign == x], 0) for x in range(K)])
         self.order = sorted(np.unique(self.assign), key=functools.cmp_to_key(self.compare_clusters))
 
         ### reorder subclones
         self.assign = np.array([self.order.index(x) for x in self.assign])
-        self.As = np.array([np.sum(self.am[self.assign == x], 0) for x in range(max(self.assign)+1)])
-        self.Bs = np.array([np.sum(self.bm[self.assign == x], 0) for x in range(max(self.assign)+1)])
+        self.As = np.array([np.sum(self.am[self.assign == x], 0) for x in range(K)])
+        self.Bs = np.array([np.sum(self.bm[self.assign == x], 0) for x in range(K)])
 
         self.means = (self.As +0.)/(self.As +self.Bs)
         # log maximum likelihood of data for this clustering
@@ -125,11 +126,15 @@ class clustering:
         score = get_tree_score(candidate_tree['tree'], [y for y in range(K)], self.As, self.Bs, \
         self.err)
         results = []
+        subtree_dict = dict()
+        counter = 1
         for number_of_clones in range(1, K):
             leaf_sets = [x for x in itertools.combinations(range(K), number_of_clones)]
             for leaf_set in leaf_sets:
+                counter += 1
+                print(counter)
                 sample_prufer = prufer_treeset(K, list(leaf_set), distribs)
-                results += sample_prufer.spawn_all_the_way(score)
+                results += sample_prufer.spawn_all_the_way(score,subtree_dict)
         return results
 
 
@@ -242,6 +247,7 @@ class prufer_treeset():
         self.rem_choices = self.length - 1  #number of remaining choices
         self.distribs = distribs
         self.M = distribs.shape[1]
+        self.prufer_seq = []
         for x in range(length):
             self.values +=  [{'tree':[-1],'nodes':[x],'root':x,'rc_distrib': None,\
             'r_distrib': self.distribs[x,:,:],'sum_distrib':sum([logsumexp(self.distribs[x,m,:]) for m in range(self.M)])}]
@@ -251,6 +257,8 @@ class prufer_treeset():
         return '\n'.join([get_ascii_tree(x['tree'],x['nodes']) for x in self.values])+'\n_________________\n'
 
     def join_root_to_node(self, rnode, node, subtree_lookup_dict):
+        """ joins a treeset as a child of another
+        recommendations: use better subtree_key"""
         new_treeset = cp.deepcopy(self)
         ind1 = new_treeset.node_assigns[node]
         ind2 = new_treeset.node_assigns[rnode]
@@ -270,10 +278,25 @@ class prufer_treeset():
         nodes = tree1['nodes']+tree2['nodes']
         root = tree1['root']
         new_treeset.values = [i for j, i in enumerate(new_treeset.values) if j not in [ind1,ind2]]
-        
-        # rnode_distrib = self.distribs[rnode,:,:]
-        # if tree2['rc_distrib'] is not None:
-        #     rnode_distrib += tree2['rc_distrib']
+        new_treeset.prufer_seq +=[root]
+        for i,x  in enumerate(new_treeset.node_assigns):
+            if x in [ind1,ind2]:
+                new_treeset.node_assigns[i] = len(new_treeset.values)
+            elif x>min(ind1,ind2):
+                new_treeset.node_assigns[i] -= 1
+                if x>max(ind1,ind2):
+                    new_treeset.node_assigns[i] -= 1
+        new_treeset.uleaves.remove(rnode)
+        new_treeset.spent_nodes.add(rnode)
+        new_treeset.rem_choices -= 1
+        tree_prufer = [x for x in new_treeset.prufer_seq if new_treeset.node_assigns[x]==len(new_treeset.values)]
+        subtree_key = tuple(sorted(nodes)+[-100]+tree_prufer)
+
+        if subtree_key in subtree_lookup_dict:
+            new_treeset.values += [subtree_lookup_dict[subtree_key]]
+            # print("tree found in dict")
+            return new_treeset
+
         if tree1['rc_distrib'] is None:
             new_rc_distrib = np.array([trap_int(tree2['r_distrib'][m,:]) for m in range(self.M)])
         else:
@@ -282,31 +305,22 @@ class prufer_treeset():
         
         new_distrib = new_rc_distrib + self.distribs[root,:,:]
         new_sum_distrib = sum([logsumexp(new_distrib[m,:]) for m in range(self.M)])
-        new_treeset.values += [{'tree':tree,'nodes':nodes,'root':root, \
-        'r_distrib': new_distrib, 'rc_distrib': new_rc_distrib, 'sum_distrib':new_sum_distrib}]
-
-        for i,x  in enumerate(new_treeset.node_assigns):
-            if x in [ind1,ind2]:
-                new_treeset.node_assigns[i] = len(new_treeset.values)-1 
-            elif x>min(ind1,ind2):
-                new_treeset.node_assigns[i] -= 1
-                if x>max(ind1,ind2):
-                    new_treeset.node_assigns[i] -= 1
-        new_treeset.uleaves.remove(rnode)
-        new_treeset.spent_nodes.add(rnode)
-        new_treeset.rem_choices -= 1
+        new_value = {'tree':tree,'nodes':nodes,'root':root, \
+        'r_distrib': new_distrib, 'rc_distrib': new_rc_distrib, 'sum_distrib':new_sum_distrib}
+        new_treeset.values += [new_value]
+        subtree_lookup_dict[subtree_key] = new_value
         return new_treeset
 
-    def spawn(self,current_score):
+    def spawn(self, current_score, subtree_lookup_dict):
         """ performs the branch and bound algorithm using the current score
         output is a list of prufer_treesets"""
         child = min(self.uleaves)
         result = []
         for parent in self.remnodes:
-            new_treeset = self.join_root_to_node(child,parent)
+            new_treeset = self.join_root_to_node(child, parent, subtree_lookup_dict)
             if sum([x['sum_distrib'] for x in new_treeset.values]) > current_score:
                 print('score =', sum([x['sum_distrib'] for x in new_treeset.values]), 'current score=', current_score)
-                print(self.__repr__())
+                # print(self.__repr__())
                 if (not new_treeset.uleaves) or (new_treeset.rem_choices < len(new_treeset.remnodes)):
                     new_treeset.remnodes.remove(parent)
                     new_treeset.uleaves.add(parent)
@@ -318,7 +332,7 @@ class prufer_treeset():
                     result += [new_treeset, new_treeset2]
         return result
 
-    def spawn_all_the_way(self,current_score):
+    def spawn_all_the_way(self, current_score, subtree_lookup_dict):
         """ spawnes (connects two trees in treeset) untill the treeset has just one tree
         in each step checks whether the maximum reachable score is not less than current score"""
         rem_choices = self.rem_choices
@@ -326,7 +340,7 @@ class prufer_treeset():
         while rem_choices>0:
             next_trees = []
             for tree in trees:
-                next_trees += tree.spawn(current_score)
+                next_trees += tree.spawn(current_score, subtree_lookup_dict)
             trees = next_trees
             if trees:
                 rem_choices = trees[0].rem_choices
