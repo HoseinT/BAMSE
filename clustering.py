@@ -17,6 +17,25 @@ tree_numbers = np.array([1, 1, 1, 2, 4, 9, 20, 47, 108, 252, 582, 1345,\
  3086, 7072, 16121, 36667, 83099, 187885, 423610, 953033, 2139158, 4792126,\
   10714105, 23911794, 53273599, 118497834, 263164833, 583582570])
 
+def distrib(a,b,err,length = 512):
+    x = np.linspace(0,1,length)
+    cf = x*(0.5-err)+err
+    y = gammaln(a+b+1)-gammaln(a+1)-gammaln(b+1) + np.log(cf)*a+np.log(1-cf)*b
+    return y
+
+def prior_fractions(K,Dir_alpha=1, length=512):
+    x = np.linspace(0,1,length)
+    if (Dir_alpha == 1):
+        return 1.0/K * ( 0 - gammaln(K * Dir_alpha)) * np.ones(length)  
+    return 1.0/K * (K * gammaln(Dir_alpha) - gammaln(K * Dir_alpha) + (Dir_alpha -1) * np.log(x))      
+
+def log_conf_penalty(assign,pf):
+    partition = np.unique(assign, return_counts = True)[1]
+    partition_config = np.unique(partition, return_counts = True)[1]
+    return np.sum(gammaln(partition+1.)) - gammaln(np.sum(partition)+1) + np.sum(gammaln(partition_config+1.)) - np.log(pf[len(partition)-1]) + np.log(tree_numbers[len(partition)]) - (len(partition)-1)*np.log(len(partition))
+
+
+
 class clustering:
 
     def __init__(self, variant_reads, normal_reads, assignments, pf, err):
@@ -36,6 +55,22 @@ class clustering:
         #### aggregate reads for each cluster + determine subclone order for heuristic search
         self.As = np.array([np.sum(self.am[self.assign == x], 0) for x in range(K)])
         self.Bs = np.array([np.sum(self.bm[self.assign == x], 0) for x in range(K)])
+        K, M = self.As.shape
+        self.distribs = [[distrib(self.As[x, m], self.Bs[x, m], self.err) for m in range(M)] \
+        for x in range(K)]
+        self.priors = [[prior_fractions(K) for m in range(M)] \
+        for x in range(K)]
+
+
+        # log maximum likelihood of data for this clustering
+        self.maxlikelihood = np.sum(gammaln(self.am + self.bm+2.) - \
+        gammaln(self.am + 1.) - gammaln(self.bm + 1.)) - np.sum(gammaln(self.As +self.Bs +2) \
+        -gammaln(self.As + 1) - gammaln(self.Bs + 1))
+        # model prior for clustering
+        self.cluster_prior = log_conf_penalty(self.assign, self.pf)
+
+    def reorder(self):
+        K, M = self.As.shape
         self.order = sorted(np.unique(self.assign), key=functools.cmp_to_key(self.compare_clusters))
 
         ### reorder subclones
@@ -43,26 +78,22 @@ class clustering:
         self.As = np.array([np.sum(self.am[self.assign == x], 0) for x in range(K)])
         self.Bs = np.array([np.sum(self.bm[self.assign == x], 0) for x in range(K)])
 
+        self.distribs = [[distrib(self.As[x, m], self.Bs[x, m], self.err) for m in range(M)] \
+        for x in range(K)]
+        self.priors = [[prior_fractions(K) for m in range(M)] \
+        for x in range(K)]
         self.means = (self.As +0.)/(self.As +self.Bs)
-        # log maximum likelihood of data for this clustering
-        self.maxlikelihood = np.sum(gammaln(self.am + self.bm+2.) - \
-        gammaln(self.am + 1.) - gammaln(self.bm + 1.)) - np.sum(gammaln(self.As +self.Bs +2) \
-        -gammaln(self.As + 1) - gammaln(self.Bs + 1))
-        # model prior for clustering
 
-
-
-        self.cluster_prior = log_conf_penalty(self.assign, self.pf)
-
-
-
+    def get_tree_score(self,tree,nodes):
+        #print nodes
+        return np.sum(tree_integrate_multisample(tree, \
+        np.array([self.distribs[n] for n in nodes]), np.array([self.priors[n] for n in nodes])))
+    
     def compare_clusters(self, clustA, clustB):  ### add error
         """ With ISA constraints compares sublcones A and B to see which is statistically more
         probable to be the parent of the other"""
-        return int(np.sign(np.sum(tree_integrate_multisample(np.array([-1., 0.]), \
-        np.ones(2), self.As[[clustB, clustA], :], self.Bs[[clustB, clustA], :], self.err, 0.0))\
-        - np.sum(tree_integrate_multisample(np.array([-1., 0.]), \
-        np.ones(2), self.As[[clustA, clustB], :], self.Bs[[clustA, clustB], :], self.err, 0.0))))
+        return int(np.sign(self.get_tree_score(np.array([-1,0]), [clustB,clustA])  - \
+        self.get_tree_score(np.array([-1,0]), [clustA,clustB])))
 
     def mean_average(self, clust):
         As = np.array([np.sum(self.am[self.assign == x], 0) for x in range(max(self.assign)+1)])
@@ -77,7 +108,7 @@ class clustering:
             self.trees = [{'tree':tree, 'root':0}]
             return [{'tree':tree, 'root':0}]
         for n in range(1, len(self.order)):
-            scores = [get_tree_score(tree+[x], [y for y in range(n+1)], self.As, self.Bs, self.err) for x in range(n)]
+            scores = [self.get_tree_score(tree+[x], [y for y in range(n+1)]) for x in range(n)]
             tree += [np.argmax(scores)]
         self.trees = [{'tree':tree, 'root':0}]
         return [{'tree':tree, 'root':0}]
@@ -87,7 +118,7 @@ class clustering:
         generating trees using the construction method in pitman double counting proof
         for Cayley's formula """
         K, M = self.As.shape
-        score = get_tree_score(candidate_tree['tree'], [y for y in range(K)], self.As, self.Bs, self.err) + \
+        score = self.get_tree_score(candidate_tree['tree'], [y for y in range(K)]) + \
         np.log(canonizeF(candidate_tree['tree'])['scre'])
         allts = []
         for rootnode in range(K):
@@ -102,9 +133,8 @@ class clustering:
                     allowed_parents = [p for p in range(K) if p not in t.values[ind]['nodes']]
                     for par in allowed_parents:
                         candidate_t = t.join_root_to_node(n, par)
-                        candidate_score = np.sum([get_tree_score(x['tree'], x['nodes'], self.As,\
-                        self.Bs, self.err) for x in candidate_t.values])
-                        if candidate_score + np.log(factorial(candidate_t.number_of_leaves()))\
+                        candidate_score = np.sum([self.get_tree_score(x['tree'], x['nodes']) for x in candidate_t.values])
+                        if candidate_score + np.log(factorial(candidate_t.number_of_leaves())) + 3\
                          >= score:
                             print('scores=', candidate_score, score)
                             print('trees =', candidate_t.values, candidate_tree['tree'])
@@ -113,7 +143,7 @@ class clustering:
             allts += ts
         self.trees = [{'tree':reorder_tree(t.values[0]['tree'], t.values[0]['nodes'], [y for y in range(K)]),\
         'root':t.values[0]['nodes'][t.values[0]['tree'].index(-1)]} for t in allts \
-        if get_tree_score(t.values[0]['tree'], t.values[0]['nodes'], self.As, self.Bs, self.err) + \
+        if self.get_tree_score(t.values[0]['tree'], t.values[0]['nodes']) + \
         np.log(canonizeF(t.values[0]['tree'])['scre']) >= score]
         return self.trees
 
@@ -121,10 +151,10 @@ class clustering:
         """ Get all the trees that have a larger score than candidate_tree
         generating trees using the construction method in prufer_treeset class """
         K, M = self.As.shape
-        distribs = np.array([[distrib(self.As[x, m], self.Bs[x, m], self.err) for m in range(M)] \
-        for x in range(K)])
-        score = get_tree_score(candidate_tree['tree'], [y for y in range(K)], self.As, self.Bs, \
-        self.err)
+        distribs = self.distribs
+        priors = self.priors
+        score = self.get_tree_score(candidate_tree['tree'], [y for y in range(K)]) + \
+        np.log(canonizeF(candidate_tree['tree'])['scre'])
         results = []
         subtree_dict = dict()
         counter = 1
@@ -133,10 +163,9 @@ class clustering:
             for leaf_set in leaf_sets:
                 counter += 1
                 print(counter)
-                sample_prufer = prufer_treeset(K, list(leaf_set), distribs)
+                sample_prufer = prufer_treeset(K, list(leaf_set), distribs, priors)
                 results += sample_prufer.spawn_all_the_way(score,subtree_dict)
         return results
-
 
     def analyse_trees_regular2(self):
         """ get tree metrices, comute model posterior and ML values without the sparsity"""
@@ -147,33 +176,11 @@ class clustering:
             tree['Amatrix'] = A
             tree['Bmatrix'] = B
             tree['assign'] = self.assign
-            score = np.sum(tree_integrate_multisample(tree = tree['tree'], b = np.ones(K), As = self.As, Bs = self.Bs , err = self.err, p= 0. ))
+            score = self.get_tree_score(tree['tree'], [x for x in range(K)])
             get_max_values_r2(tree, self.As,self.Bs, self.err)
             tree['vaf'] = tree['Bmatrix'].dot(tree['clone_proportions'])
             tree['score'] = score +np.log(canonizeF(tree['tree'])['scre'])
             tree['totalscore']= tree['score']+self.cluster_prior +             self.maxlikelihood
-
-    def analyse_trees_sparse2(self, prob_zero_cluster):
-        #get tree metrices, comute model posterior and ML values with sparsity
-        p = prob_zero_cluster
-        K,M = self.As.shape
-        for tree in self.trees:
-            B = get_matrix(tree['tree'])[0]
-            A= np.linalg.inv(B)
-            tree['Amatrix'] = A
-            tree['Bmatrix'] = B
-            tree['assign'] = self.assign
-            profls = np.array(list(itertools.product([0, 1], repeat=K)))
-            integs = [tree_integrate_multisample(tree = tree['tree'], b = x,As = self.As, Bs = self.Bs, err = self.err, p = p) for x in profls]
-            tree['probability_profile'] = integs
-            get_max_values2(tree, self.As, self.Bs, self.err)
-            tree['score'] = np.prod( np.sum(integs,0)) * canonizeF(tree['tree'])['scre']
-            tree['totalscore']= np.log(tree['score'])+self.cluster_prior +             self.maxlikelihood
-
-def log_conf_penalty(assign,pf):
-    partition = np.unique(assign, return_counts = True)[1]
-    partition_config = np.unique(partition, return_counts = True)[1]
-    return np.sum(gammaln(partition+1.)) - gammaln(np.sum(partition)+1) +     np.sum(gammaln(partition_config+1.)) - np.log(pf[len(partition)-1]) +     np.log(tree_numbers[len(partition)]) - (len(partition)-1)*np.log(len(partition))
 
 
 def log_conf_penalty2(assign,alphaa):
@@ -235,7 +242,7 @@ class prufer_treeset():
     - integrations inside the class
     - rc_distibs hold the convolution of distribs for all childs of a root at each time"""
 
-    def __init__(self,length,leaves,distribs):
+    def __init__(self,length,leaves,distribs,priors):
         """ length is the number of subclones, leaves are the indices of leaf nodes and 
         distribs is the list of distributios for each subclone"""
         self.length = length
@@ -246,12 +253,12 @@ class prufer_treeset():
         self.spent_nodes = set()
         self.rem_choices = self.length - 1  #number of remaining choices
         self.distribs = distribs
+        self.priors = priors
         self.M = distribs.shape[1]
         self.prufer_seq = []
         for x in range(length):
             self.values +=  [{'tree':[-1],'nodes':[x],'root':x,'rc_distrib': None,\
             'r_distrib': self.distribs[x,:,:],'sum_distrib':sum([logsumexp(self.distribs[x,m,:]) for m in range(self.M)])}]
-
     def __repr__(self):
         """  represenation of the class"""
         return '\n'.join([get_ascii_tree(x['tree'],x['nodes']) for x in self.values])+'\n_________________\n'
@@ -349,47 +356,11 @@ class prufer_treeset():
         return trees
 
 
-    
-# def distrib(a,b,err,length = 2048):
-#     x = np.linspace(0,1,length)
-#     y = beta.pdf(x*(0.5-err)+err,a+1,a+b+2)
-#     return y/np.sum(y)*length
-
-
-def distrib(a,b,err,length = 512):
-    x = np.linspace(0,1,length)
-    cf = x*(0.5-err)+err
-    y = gammaln(a+b+1)-gammaln(a+1)-gammaln(b+1) + np.log(cf)*a+np.log(1-cf)*b
-    return y
-
-
-# def trap_int(xs):
-#     #print max(xs)
-#     y = np.zeros(len(xs))
-#     if len(xs) == 0:
-#         return y
-#     y[0] = - float('inf')
-#     if len(xs) == 1:
-#         return y
-#     for i in range(1,len(xs)):
-#         y[i] = logsumexp([y[i-1],xs[i]-np.log(2),xs[i-1]-np.log(2)])
-#     return y - np.log(len(xs)-1)
-
-
-# def trap_int(xs, ref = 5):
-#     scale = ref - max(xs)
-#     x = xs + scale
-#     return np.log(np.cumsum(np.exp(x))) - scale - np.log(len(x))
-
 def trap_int(xs):
     x = list(xs)
     for i in range(1,len(x)):
         x[i] = np.logaddexp(x[i-1],x[i])
     return np.array(x) - np.log(len(x)) 
-
-    
-# def trap_int(x):
-#     return (np.cumsum(x) - (x[0]+x)/2.0)/(len(x)-1)
 
 def my_convolve(a,b):
     l=len(a)
@@ -398,58 +369,29 @@ def my_convolve(a,b):
         return
     return np.array([logsumexp(b[:x+1]+a[x::-1]) for x in range(l)]) - np.log(l)
 
-# def my_convolve(x,y):
-#     res = (x[0]*y+y[0]*x)/2.0
-#     return (np.convolve(x,y)[:len(x)] - res) / (len(x)-1)
-
-
-def my_convolve2(x,y):
-    res = (x[0]*y+y[0]*x)/2.0
-#    print len(res)
-    return (fftconvolve(x,y)[:len(x)] - res) / (len(x)-1)
-
-
-def eval_int(tree,node,distribs,starred):
+def eval_int(tree,node,distribs,priors):
 
     childs =  get_childs(tree,node)
 
     if len(childs) == 0:
-        return distribs[node]
-    elif len(childs) ==1:
-        if starred[childs[0]] == '*':
-            return distribs[node] + eval_int(tree,childs[0],distribs,starred)
-        else:
-            return distribs[node] + trap_int(eval_int(tree,childs[0],distribs,starred))
-    elif len(childs)>1:
-        if starred[childs[0]] == '*':
-            ch0= eval_int(tree,childs[0],distribs,starred)
-        else:
-            ch0= trap_int(eval_int(tree,childs[0],distribs,starred))
-        return distribs[node] + functools.reduce(lambda x,y:my_convolve(x,y),[ch0]+[eval_int(tree,x,distribs,starred) for x         in childs[1:]])
+        return my_convolve(distribs[node], priors[node])
+    else:
+        return distribs[node] + functools.reduce(lambda x,y:my_convolve(x,y),[priors[node]]+[eval_int(tree,x,distribs,priors) for x in childs])
 
 
-def tree_integrate_single_sample(tree,b,distribs,p):
-    s = 0
-    if not p==0:
-        s = np.log(p)*(len(b)-sum(b)) + np.log(1-p)*sum(b)
-    starred = ['-' for _ in range(len(tree))]
-    culled_tree = cp.deepcopy(tree)
-    for node in np.where(b==0)[0]:
-        if len(get_childs(tree,node))==0:
-            s += distribs[node][0]
-            culled_tree[node] = 10000
-        else:
-            starred[get_childs(tree,node)[0]] = '*'
-    root = list(tree).index(-1)
-    return s - gammaln(np.sum(b)+2) + trap_int(eval_int(culled_tree,root,distribs,starred))[-1]
+
+def tree_integrate_single_sample(tree, distribs, priors):
+    root = [i for i,x in enumerate(tree) if x == -1][0]
+    return trap_int(eval_int(tree,root,distribs, priors))[-1]
 
 
-def tree_integrate_multisample(tree,b,As,Bs,err,p):
-    K,M = As.shape
+def tree_integrate_multisample(tree, distribs, priors):
+    K,M,_ = distribs.shape
     score = []
     for m in range(M):
-        distribs = [distrib(As[x,m],Bs[x,m],err) for x in range(K)]
-        score += [tree_integrate_single_sample(tree,b,distribs,p)]
+        distrib = [distribs[x,m] for x in range(K)]
+        prior = [priors[x,m] for x in range(K)]
+        score += [tree_integrate_single_sample(tree,distrib,prior)]
     return np.array(score)
 
 def part_func(n,kmax):
@@ -464,17 +406,6 @@ def part_func(n,kmax):
                  T[m-1][k] += T[m-2-k][k]
         m = m+1
     return T[n-1]
-
-
-def get_max_values2(sparse_tree,As,Bs,err):
-    prob_profile, B = sparse_tree['probability_profile'],    sparse_tree['Bmatrix']
-    K,M = As.shape
-    max_inds = np.argmax(prob_profile,0)
-    profls = np.array(list(itertools.product([0, 1], repeat=K)))
-    max_profs = profls[max_inds]
-    result = solve4(B,As,Bs,err,max_profs)
-    sparse_tree['clone_proportions'] = result['s']
-    return sparse_tree['clone_proportions']
 
 def solve4(B,am,bm,er,profile):
     #print profile
@@ -500,7 +431,3 @@ def get_max_values_r2(regular_tree, As, Bs, err):
     result = solve4(B,As,Bs,err,[np.ones(K) for _ in range(M)])
     regular_tree['clone_proportions'] = result['s']
     return regular_tree['clone_proportions']
-
-def get_tree_score(tree,nodes,As,Bs,err):
-    #print nodes
-    return np.sum(tree_integrate_multisample(tree,np.ones(len(tree)),As[nodes,:], Bs[nodes,:],err,0.0))

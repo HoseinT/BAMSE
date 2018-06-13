@@ -92,8 +92,9 @@ for x,clust in enumerate(clusts):
    print ('analysis clustering: ' +str(x+1) +' of '+str(len(clusts)))
 #   clust.get_t_normals(err)
 #    clust.get_trees()
+   clust.reorder()
    clust.get_candidate_tree()
-   clust.get_trees3(clust.trees[0])
+   clust.get_trees2(clust.trees[0])
    print(len(clust.trees))
     
 #   if sparsity <0 :
@@ -108,21 +109,10 @@ for x in trees:
 sparse_trees =[]
 for t in range(min(top_trees,len(trees))):
     this_tree = trees[t]
-    if (sparsity>0 and sparsity <1):
-        temp_clust = clustering(X['As'],X['Bs'],trees[t]['assign'],pf,err)
-        temp_clust.trees = [trees[t]]
-        temp_clust.analyse_trees_sparse2(sparsity,err)
-        this_tree = temp_clust.trees[0]
-        sparse_trees +=[cp.deepcopy(this_tree)]
-        this_tree = remove_zeros(this_tree)
     this_tree = remove_zeros(this_tree)
     this_tree['vaf'] = this_tree['Bmatrix'].dot(this_tree['clone_proportions'])
     
     write_dot_files(this_tree,sample_colors,cluster_colors,'tree_number_'+str(t)+'_subclones.dot','tree_number_'+str(t)+'_samples.dot')
     write_text_output([this_tree],'tree_number_'+str(t)+'.txt')
 
-if (sparsity > 0. and sparsity < 1.):
-    pickle.dump(sparse_trees,open('bamse.pickle','w'))
-    write_text_output(sparse_trees,'bamse_output.txt')
-else:
-    write_text_output(trees[:min(top_trees,len(trees))],'bamse_output.txt')
+write_text_output(trees[:min(top_trees,len(trees))],'bamse_output.txt')
